@@ -25,7 +25,8 @@ impl TryFrom<&Settings> for Context {
     type Error = Error;
 
     fn try_from(value: &Settings) -> Result<Self, Self::Error> {
-        let bitcoin_client = BitcoinCoreClient::try_from(&value.bitcoin_rpc_endpoint)?;
+        let bitcoin_client =
+            BitcoinCoreClient::connect(&value.bitcoin_rpc_endpoint, value.bitcoin_rpc_timeout)?;
         let emily_config = EmilyConfig {
             base_path: value
                 .emily_endpoint

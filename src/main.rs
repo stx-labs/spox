@@ -176,16 +176,21 @@ async fn runloop(
             )
         });
 
-        let _ = fetch_and_create_deposits(&context, deposit_monitor, &chain_tip)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(
-                    %error,
-                    "error processing pending deposits"
-                )
-            });
-
-        last_chain_tip = Some(chain_tip);
+        match fetch_and_create_deposits(&context, deposit_monitor, &chain_tip).await {
+            Ok(()) => {
+                last_chain_tip = Some(chain_tip);
+            }
+            Err(Error::ScanTxOutInProgress) => {
+                tracing::info!(
+                    "skipping deposit processing: a scantxoutset is already running on bitcoind; will retry next poll"
+                );
+                // Do not advance `last_chain_tip`: retry the same tip next iteration.
+            }
+            Err(error) => {
+                tracing::warn!(%error, "error processing pending deposits");
+                last_chain_tip = Some(chain_tip);
+            }
+        }
     }
 }
 
