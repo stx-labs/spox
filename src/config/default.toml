@@ -16,6 +16,14 @@ bitcoin_rpc_endpoint = "http://devnet:devnet@127.0.0.1:18443"
 # Environment: SPOX_POLLING_INTERVAL
 # polling_interval = 30
 
+# HTTP request timeout (in seconds) for Bitcoin Core RPC calls. Must exceed
+# the worst-case `scantxoutset` duration on the target node — on a full
+# UTXO set this is typically 1–10 minutes, longer on slow disks.
+#
+# Required: false
+# Environment: SPOX_BITCOIN_RPC_TIMEOUT
+# bitcoin_rpc_timeout = 900
+
 # Registry smart contract
 #
 # Required: false

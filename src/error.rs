@@ -94,6 +94,11 @@ pub enum Error {
     #[error("a call to `scantxoutset` failed")]
     ScanTxOutFailure,
 
+    /// A `scantxoutset` is already running on the bitcoind node. The current
+    /// poll iteration is skipped and the scan will be retried on the next one.
+    #[error("a `scantxoutset` is already in progress on the bitcoin node; skipping this poll")]
+    ScanTxOutInProgress,
+
     /// Could not make a successful request to the Stacks node.
     #[error("failed to make a request to the stacks Node: {0}")]
     StacksNodeRequest(#[source] reqwest::Error),
