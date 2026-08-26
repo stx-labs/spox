@@ -75,8 +75,8 @@
 (define-constant ERR_UNKNOWN_PENDING_WITHDRAWAL (err u607))
 ;; start-reward-cycle is before the position's first-reward-cycle
 (define-constant ERR_INVALID_START_REWARD_CYCLE (err u608))
-;; This is returned when the contract-caller is not allowed to register,
-;; add claims, or cancel for this staker.
+;; This is returned when the contract-caller is not the registrant for add-claims
+;; calls, or not the staker or registrant for cancel-registration calls.
 (define-constant ERR_UNAUTHORIZED (err u609))
 ;; A registration already exists for this staker and signer-manager
 (define-constant ERR_ALREADY_REGISTERED (err u610))
@@ -151,8 +151,13 @@
         next-claim-distribution: uint,
         ;; The STX held by this contract for unconsumed installments.
         ;; Burned one installment at a time per processed claim. Note that
-        ;; this amount is refunded to the staker when they cancel.
+        ;; this amount is refunded to the registrant when the registration
+        ;; is cancelled.
         prepaid-ustx: uint,
+        ;; The principal that created this registration and whose STX is
+        ;; escrowed in prepaid-ustx. The only caller allowed to add-claims.
+        ;; Cancel refunds remaining prepaid-ustx to this principal.
+        registrant: principal,
     }
 )
 
@@ -165,7 +170,7 @@
 ;; Returns:
 ;;   The registration tuple if present, otherwise none. The tuple holds
 ;;   bond-index, remaining-claims, one-claim-per-reward-cycle,
-;;   next-claim-distribution, and prepaid-ustx.
+;;   next-claim-distribution, prepaid-ustx, and payer.
 (define-read-only (get-registration
         (staker principal)
         (signer-manager principal)
@@ -464,6 +469,7 @@
             one-claim-per-reward-cycle: bool,
             next-claim-distribution: uint,
             prepaid-ustx: uint,
+            registrant: principal,
         })
         (current-distribution-cycle uint)
         (last-compute-distribution (optional uint))
@@ -675,6 +681,7 @@
                     one-claim-per-reward-cycle: bool,
                     next-claim-distribution: uint,
                     prepaid-ustx: uint,
+                    registrant: principal,
                 }
             ),
         })
@@ -772,13 +779,8 @@
 
 ;; --- Registration lifecycle helpers ---
 ;; register-for-claims / add-claims escrow STX and write the registration.
-;; Advance burns one installment from escrow; cancel refunds the rest.
-
-;; Staker may act on their own registration; admins may register or top up
-;; anyone. Cancel stays staker-only (see cancel-registration).
-(define-private (authorize-staker-or-admin (staker principal))
-    (ok (asserts! (or (is-eq contract-caller staker) (is-admin contract-caller)) ERR_UNAUTHORIZED))
-)
+;; Advance burns one installment from escrow; cancel refunds the rest of
+;; the escrowed STX to the payer of the registration.
 
 ;; Escrow the STX fee for the given number of claim installments unless
 ;; contract-caller is an admin. Returns the micro-STX amount escrowed.
@@ -798,8 +800,9 @@
     )
 )
 
-;; Register a staker for automated reward claims. Only the staker or an admin
-;; may call this. Admins pay no fee. The staker must currently be staking in
+;; Register a staker for automated reward claims. Anyone may call this;
+;; contract-caller is stored as `registrant` and is the only principal that may
+;; add-claims. Admins pay no fee. The staker must currently be staking in
 ;; pox-5. The active bond-index, if any, is looked up from pox-5; callers do
 ;; not pass it. Schedule seeds next-claim-distribution from start-reward-cycle.
 ;; Fee STX is escrowed in this contract and burned one installment at a time
@@ -807,8 +810,7 @@
 ;; registered; use add-claims to buy more installments.
 ;;
 ;; Parameters:
-;;   staker                      The principal being registered. Must equal
-;;                               contract-caller unless the caller is an admin.
+;;   staker                      The principal being registered.
 ;;   signer-manager              Together with staker forms the registration key.
 ;;                               Must be the signer pox-5 reports for the
 ;;                               position; every claim pulls from it.
@@ -828,9 +830,9 @@
 ;;
 ;; Returns:
 ;;   ok with the number of claim installments bought on this call, or an error
-;;   if the caller is unauthorized, fee buys no claims, a registration already
-;;   exists, the position is missing or under a different signer, or
-;;   start-reward-cycle is before the position's first-reward-cycle.
+;;   if fee buys no claims, a registration already exists, the position is
+;;   missing or under a different signer, or start-reward-cycle is before the
+;;   position's first-reward-cycle.
 (define-public (register-for-claims
         (staker principal)
         (signer-manager <reward-claim-signer-manager-trait>)
@@ -848,7 +850,6 @@
             })
             (position (unwrap! (get-position staker) ERR_NO_CURRENT_POSITION))
         )
-        (try! (authorize-staker-or-admin staker))
         ;; Validate before escrowing.
         (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
         (asserts! (is-none (map-get? registrations key)) ERR_ALREADY_REGISTERED)
@@ -863,6 +864,7 @@
                 one-claim-per-reward-cycle: one-claim-per-reward-cycle,
                 next-claim-distribution: (initial-next-claim-distribution start-reward-cycle one-claim-per-reward-cycle),
                 prepaid-ustx: escrowed,
+                registrant: contract-caller,
             })
             (ll-append key)
             (print {
@@ -881,13 +883,12 @@
 )
 
 ;; Buy additional claim installments for an existing registration. Only the
-;; staker or an admin may call this. Does not change next-claim-distribution,
-;; one-claim-per-reward-cycle, or bond-index. Fee STX is escrowed and burned
-;; later on advance.
+;; stored registrant may call this. Does not change next-claim-distribution,
+;; one-claim-per-reward-cycle, bond-index, or payer. Fee STX is escrowed and
+;; burned later on advance.
 ;;
 ;; Parameters:
-;;   staker          The staker on the registration key. Must equal contract-caller
-;;                   unless the caller is an admin.
+;;   staker          The staker on the registration key.
 ;;   signer-manager  The signer-manager principal on the registration key.
 ;;   fee             STX paid by contract-caller. Buys the minimum of fee divided by
 ;;                   fee-per-claim and MAX_CLAIM_INSTALLMENTS. Only the used portion
@@ -896,7 +897,7 @@
 ;;
 ;; Returns:
 ;;   ok with the number of claim installments added on this call, or an error
-;;   if the caller is unauthorized, fee buys no claims, or no registration
+;;   if the caller is not the registrant, fee buys no claims, or no registration
 ;;   exists for this key.
 ;;
 ;; #[allow(unchecked_data)]
@@ -914,45 +915,44 @@
             })
         )
         (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
-        (try! (authorize-staker-or-admin staker))
-        ;; Fail before escrowing if this key is not registered.
-        (let (
-                (existing (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED))
-                (escrowed (try! (escrow-registration-fee num-claims)))
-            )
-            (map-set registrations key
-                (merge existing {
-                    remaining-claims: (+ (get remaining-claims existing) num-claims),
-                    prepaid-ustx: (+ (get prepaid-ustx existing) escrowed),
+        ;; Fail before escrowing if this key is not registered or caller is not the registrant.
+        (let ((existing (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED)))
+            (asserts! (is-eq contract-caller (get registrant existing)) ERR_UNAUTHORIZED)
+            (let ((escrowed (try! (escrow-registration-fee num-claims))))
+                (map-set registrations key
+                    (merge existing {
+                        remaining-claims: (+ (get remaining-claims existing) num-claims),
+                        prepaid-ustx: (+ (get prepaid-ustx existing) escrowed),
+                    })
+                )
+                (print {
+                    topic: "add-claims",
+                    staker: staker,
+                    registrant: contract-caller,
+                    signer-manager: signer-manager,
+                    num-claims: num-claims,
+                    escrowed: escrowed,
                 })
+                (ok num-claims)
             )
-            (print {
-                topic: "add-claims",
-                staker: staker,
-                payer: contract-caller,
-                signer-manager: signer-manager,
-                num-claims: num-claims,
-                escrowed: escrowed,
-            })
-            (ok num-claims)
         )
     )
 )
 
-;; Cancel a registration. Only the staker may call this - not an admin, even
-;; if the admin created the registration. Deletes the registration map entry
-;; and removes it from the registration linked list. Refunds any remaining
-;; prepaid-ustx to the staker. Does not touch pending L1 withdrawals for this
-;; key; those remain settleable via settle-pending-withdrawal.
+;; Cancel a registration. The staker or the stored registrant may call this.
+;; Deletes the registration map entry and removes it from the registration
+;; linked list. Refunds any remaining prepaid-ustx to the registrant. Does not
+;; touch pending L1 withdrawals for this key; those remain settleable via
+;; settle-pending-withdrawal.
 ;;
 ;; Parameters:
-;;   staker          The staker on the registration key. Must equal contract-caller.
+;;   staker          The staker on the registration key.
 ;;   signer-manager  The signer-manager principal on the registration key.
 ;;
 ;; Returns:
-;;   ok with the micro-STX refunded to the staker, ERR_UNAUTHORIZED if
-;;   contract-caller is not the staker, or ERR_NOT_REGISTERED if no registration
-;;   exists for this key.
+;;   ok with the micro-STX refunded to the registrant, ERR_UNAUTHORIZED
+;;   if contract-caller is neither the staker nor the registrant, or
+;;   ERR_NOT_REGISTERED if no registration exists for this key.
 ;;
 ;; #[allow(unchecked_data)]
 (define-public (cancel-registration
@@ -969,18 +969,22 @@
                 })
                 (registration (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED))
                 (refund (get prepaid-ustx registration))
+                (registrant (get registrant registration))
             )
-            (asserts! (is-eq contract-caller staker) ERR_UNAUTHORIZED)
+            (asserts! (or (is-eq contract-caller staker) (is-eq contract-caller registrant))
+                ERR_UNAUTHORIZED
+            )
             (map-delete registrations key)
             (ll-remove key)
             (begin
                 (if (> refund u0)
-                    (try! (as-contract? ((with-stx refund)) (try! (stx-transfer? refund tx-sender staker))))
+                    (try! (as-contract? ((with-stx refund)) (try! (stx-transfer? refund tx-sender registrant))))
                     true
                 )
                 (print {
                     topic: "cancel-registration",
                     staker: staker,
+                    registrant: registrant,
                     signer-manager: signer-manager,
                     refund: refund,
                 })
@@ -1007,6 +1011,7 @@
             one-claim-per-reward-cycle: bool,
             next-claim-distribution: uint,
             prepaid-ustx: uint,
+            registrant: principal,
         })
         (current-distribution-cycle uint)
     )
@@ -1143,6 +1148,7 @@
             one-claim-per-reward-cycle: bool,
             next-claim-distribution: uint,
             prepaid-ustx: uint,
+            registrant: principal,
         })
         (reward-cycle uint)
         (claim-distribution uint)
