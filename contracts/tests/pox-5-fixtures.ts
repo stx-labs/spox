@@ -638,6 +638,38 @@ export function registerForClaims(
   );
 }
 
+export type RegisterManyEntry = {
+  staker: string;
+  startRewardCycle: bigint;
+  oneClaimPerRewardCycle: boolean;
+  fee: bigint;
+};
+
+export function registerManyForClaims(
+  stakers: RegisterManyEntry[],
+  sender: string,
+  signerManager: string,
+) {
+  return simnet.callPublicFn(
+    "reward-claim-registry",
+    "register-many-for-claims",
+    [
+      Cl.principal(signerManager),
+      Cl.list(
+        stakers.map((entry) =>
+          Cl.tuple({
+            staker: Cl.principal(entry.staker),
+            "start-reward-cycle": Cl.uint(entry.startRewardCycle),
+            "one-claim-per-reward-cycle": Cl.bool(entry.oneClaimPerRewardCycle),
+            fee: Cl.uint(entry.fee),
+          }),
+        ),
+      ),
+    ],
+    sender,
+  );
+}
+
 export function addClaims(
   staker: string,
   fee: bigint,

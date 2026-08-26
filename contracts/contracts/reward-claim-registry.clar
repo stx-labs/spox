@@ -170,7 +170,7 @@
 ;; Returns:
 ;;   The registration tuple if present, otherwise none. The tuple holds
 ;;   bond-index, remaining-claims, one-claim-per-reward-cycle,
-;;   next-claim-distribution, prepaid-ustx, and payer.
+;;   next-claim-distribution, prepaid-ustx, and registrant.
 (define-read-only (get-registration
         (staker principal)
         (signer-manager principal)
@@ -780,7 +780,7 @@
 ;; --- Registration lifecycle helpers ---
 ;; register-for-claims / add-claims escrow STX and write the registration.
 ;; Advance burns one installment from escrow; cancel refunds the rest of
-;; the escrowed STX to the payer of the registration.
+;; the escrowed STX to the registrant of the registration.
 
 ;; Escrow the STX fee for the given number of claim installments unless
 ;; contract-caller is an admin. Returns the micro-STX amount escrowed.
@@ -797,6 +797,90 @@
             true
         )
         (ok amount)
+    )
+)
+
+;; Register a staker for automated reward claims. 
+;;
+;; See register-for-claims for documentation.
+(define-private (register-for-claims-impl
+        (staker principal)
+        (signer-manager principal)
+        (start-reward-cycle uint)
+        (one-claim-per-reward-cycle bool)
+        (fee uint)
+    )
+    (let (
+            (price (var-get fee-per-claim))
+            (num-claims (min-uint (/ fee price) MAX_CLAIM_INSTALLMENTS))
+            (key {
+                staker: staker,
+                signer-manager: signer-manager,
+            })
+            (position (unwrap! (get-position staker) ERR_NO_CURRENT_POSITION))
+        )
+        (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
+        (asserts! (is-none (map-get? registrations key)) ERR_ALREADY_REGISTERED)
+        (asserts! (is-eq signer-manager (get signer position)) ERR_SIGNER_MANAGER_MISMATCH)
+        (asserts! (>= start-reward-cycle (get first-reward-cycle position))
+            ERR_INVALID_START_REWARD_CYCLE
+        )
+        (let ((escrowed (try! (escrow-registration-fee num-claims))))
+            (map-set registrations key {
+                bond-index: (get bond-index position),
+                remaining-claims: num-claims,
+                one-claim-per-reward-cycle: one-claim-per-reward-cycle,
+                next-claim-distribution: (initial-next-claim-distribution start-reward-cycle one-claim-per-reward-cycle),
+                prepaid-ustx: escrowed,
+                registrant: contract-caller,
+            })
+            (ll-append key)
+            (print {
+                topic: "register-for-claims",
+                staker: staker,
+                registrant: contract-caller,
+                signer-manager: signer-manager,
+                start-reward-cycle: start-reward-cycle,
+                one-claim-per-reward-cycle: one-claim-per-reward-cycle,
+                num-claims: num-claims,
+                escrowed: escrowed,
+            })
+            (ok num-claims)
+        )
+    )
+)
+
+;; Fold step for register-many-for-claims: match each register-for-claims-impl
+;; result so a skip or failure doesn't abort the batch. Prints a skip event on
+;; failure. Returns the count in the accumulator's registered field.
+(define-private (count-registations
+        (entry {
+            staker: principal,
+            start-reward-cycle: uint,
+            one-claim-per-reward-cycle: bool,
+            fee: uint,
+        })
+        (state {
+            signer: principal,
+            registered: uint,
+        })
+    )
+    (match (register-for-claims-impl (get staker entry) (get signer state) (get start-reward-cycle entry)
+        (get one-claim-per-reward-cycle entry) (get fee entry)
+    )
+        num-claims (merge state { registered: (+ (get registered state) u1) })
+        err-code (begin
+            (print {
+                topic: "register-for-claims-skipped",
+                staker: (get staker entry),
+                signer-manager: (get signer state),
+                start-reward-cycle: (get start-reward-cycle entry),
+                one-claim-per-reward-cycle: (get one-claim-per-reward-cycle entry),
+                fee: (get fee entry),
+                error: err-code,
+            })
+            state
+        )
     )
 )
 
@@ -840,52 +924,45 @@
         (one-claim-per-reward-cycle bool)
         (fee uint)
     )
-    (let (
-            (price (var-get fee-per-claim))
-            (num-claims (min-uint (/ fee price) MAX_CLAIM_INSTALLMENTS))
-            (signer (contract-of signer-manager))
-            (key {
-                staker: staker,
-                signer-manager: signer,
-            })
-            (position (unwrap! (get-position staker) ERR_NO_CURRENT_POSITION))
-        )
-        ;; Validate before escrowing.
-        (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
-        (asserts! (is-none (map-get? registrations key)) ERR_ALREADY_REGISTERED)
-        (asserts! (is-eq signer (get signer position)) ERR_SIGNER_MANAGER_MISMATCH)
-        (asserts! (>= start-reward-cycle (get first-reward-cycle position))
-            ERR_INVALID_START_REWARD_CYCLE
-        )
-        (let ((escrowed (try! (escrow-registration-fee num-claims))))
-            (map-set registrations key {
-                bond-index: (get bond-index position),
-                remaining-claims: num-claims,
-                one-claim-per-reward-cycle: one-claim-per-reward-cycle,
-                next-claim-distribution: (initial-next-claim-distribution start-reward-cycle one-claim-per-reward-cycle),
-                prepaid-ustx: escrowed,
-                registrant: contract-caller,
-            })
-            (ll-append key)
-            (print {
-                topic: "register-for-claims",
-                staker: staker,
-                registrant: contract-caller,
-                signer-manager: signer,
-                start-reward-cycle: start-reward-cycle,
-                one-claim-per-reward-cycle: one-claim-per-reward-cycle,
-                num-claims: num-claims,
-                escrowed: escrowed,
-            })
-            (ok num-claims)
-        )
+    (register-for-claims-impl staker (contract-of signer-manager) start-reward-cycle
+        one-claim-per-reward-cycle fee
     )
+)
+
+;; Register up to 100 stakers under the same signer-manager in one call.
+;; Runs register-for-claims-impl per entry. 
+;;
+;; Note that a failure for any entry does not abort the batch and print
+;; events are emitted for both successful and failed registrations.
+;;
+;; Ssee register-for-claims parameters documentation.
+;;
+;; Returns:
+;;   ok with the number of stakers for which register-for-claims-impl
+;;   returned ok.
+(define-public (register-many-for-claims
+        (signer-manager <reward-claim-signer-manager-trait>)
+        (stakers (list 100
+            {
+                staker: principal,
+                start-reward-cycle: uint,
+                one-claim-per-reward-cycle: bool,
+                fee: uint,
+            }
+        ))
+    )
+    (ok (get registered
+        (fold count-registations stakers {
+            signer: (contract-of signer-manager),
+            registered: u0,
+        })
+    ))
 )
 
 ;; Buy additional claim installments for an existing registration. Only the
 ;; stored registrant may call this. Does not change next-claim-distribution,
-;; one-claim-per-reward-cycle, bond-index, or payer. Fee STX is escrowed and
-;; burned later on advance.
+;; one-claim-per-reward-cycle, bond-index, or registrant. Fee STX is escrowed
+;; and burned later when a claim is processed.
 ;;
 ;; Parameters:
 ;;   staker          The staker on the registration key.
@@ -978,7 +1055,9 @@
             (ll-remove key)
             (begin
                 (if (> refund u0)
-                    (try! (as-contract? ((with-stx refund)) (try! (stx-transfer? refund tx-sender registrant))))
+                    (try! (as-contract? ((with-stx refund))
+                        (try! (stx-transfer? refund tx-sender registrant))
+                    ))
                     true
                 )
                 (print {
