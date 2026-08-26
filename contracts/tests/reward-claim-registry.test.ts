@@ -98,7 +98,7 @@ function stxRegistration(
   remaining: bigint,
   nextClaimDistribution: bigint,
   prepaid: bigint = remaining * FEE_PER_CLAIM,
-  registrant: string = wallet1,
+  sponsor: string = wallet1,
 ) {
   return Cl.tuple({
     "bond-index": Cl.none(),
@@ -106,7 +106,7 @@ function stxRegistration(
     "one-claim-per-reward-cycle": Cl.bool(true),
     "next-claim-distribution": Cl.uint(nextClaimDistribution),
     "prepaid-ustx": Cl.uint(prepaid),
-    registrant: Cl.principal(registrant),
+    sponsor: Cl.principal(sponsor),
   });
 }
 
@@ -115,7 +115,7 @@ function bondRegistration(
   remaining: bigint,
   nextClaimDistribution: bigint,
   prepaid: bigint = remaining * FEE_PER_CLAIM,
-  registrant: string = wallet1,
+  sponsor: string = wallet1,
 ) {
   return Cl.tuple({
     "bond-index": Cl.some(Cl.uint(bondIndex)),
@@ -123,7 +123,7 @@ function bondRegistration(
     "one-claim-per-reward-cycle": Cl.bool(false),
     "next-claim-distribution": Cl.uint(nextClaimDistribution),
     "prepaid-ustx": Cl.uint(prepaid),
-    registrant: Cl.principal(registrant),
+    sponsor: Cl.principal(sponsor),
   });
 }
 
@@ -177,7 +177,7 @@ function registrationRow(
   prepaid: bigint = remaining * FEE_PER_CLAIM,
   oneClaimPerRewardCycle = true,
   bondIndex: OptionalCV<UIntCV> = Cl.none(),
-  registrant: string = staker,
+  sponsor: string = staker,
 ) {
   return Cl.tuple({
     staker: Cl.principal(staker),
@@ -187,7 +187,7 @@ function registrationRow(
     "one-claim-per-reward-cycle": Cl.bool(oneClaimPerRewardCycle),
     "next-claim-distribution": Cl.uint(nextClaimDistribution),
     "prepaid-ustx": Cl.uint(prepaid),
-    registrant: Cl.principal(registrant),
+    sponsor: Cl.principal(sponsor),
   });
 }
 
@@ -410,7 +410,7 @@ describe("register-for-claims", () => {
     );
   });
 
-  it("lets a third party register a staker and records them as registrant", () => {
+  it("lets a third party register a staker and records them as sponsor", () => {
     const before = stxBalance(wallet2);
     expect(
       registerForClaims(wallet1, FEE_PER_CLAIM, wallet2, SIGNER_MANAGER, STX_START, true).result,
@@ -485,7 +485,7 @@ describe("register-many-for-claims", () => {
         "one-claim-per-reward-cycle": Cl.bool(false),
         "next-claim-distribution": Cl.uint(initialNextClaimDistribution(start2, false)),
         "prepaid-ustx": Cl.uint(5n * FEE_PER_CLAIM),
-        registrant: Cl.principal(wallet3),
+        sponsor: Cl.principal(wallet3),
       }),
     );
   });
@@ -558,8 +558,8 @@ describe("register-many-for-claims", () => {
     expect(getRegistration(wallet2, SIGNER_MANAGER)).toBeNone();
   });
 
-  it("registers 100 stakers in one call", () => {
-    const TOTAL = 100;
+  it("registers 50 stakers in one call", () => {
+    const TOTAL = 50;
     const stakers = Array.from({ length: TOTAL }, (_, i) => {
       const hex = (BigInt(i) + 1n).toString(16).padStart(64, "0") + "01";
       return privateKeyToAddress(hex, "testnet");
@@ -2211,23 +2211,23 @@ describe("reentrancy", () => {
     expectSingleAdvance();
   });
 
-  it("rejects add-claims reentry when the signer-manager is not the payer", () => {
+  it("blocks add-claims reentry with ERR_REENTRANT_CALL", () => {
     advanceToPending();
     setMaliciousReenterMode(REENTER_ADD_CLAIMS, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
       Cl.none(),
     );
-    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_UNAUTHORIZED));
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
     expectSingleAdvance();
   });
 
-  it("rejects register-for-claims reentry with a mismatched signer-manager", () => {
+  it("blocks register-for-claims reentry with ERR_REENTRANT_CALL", () => {
     advanceToPending();
     setMaliciousReenterMode(REENTER_REGISTER, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
       Cl.none(),
     );
-    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_SIGNER_MANAGER_MISMATCH));
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
     expectSingleAdvance();
   });
 });

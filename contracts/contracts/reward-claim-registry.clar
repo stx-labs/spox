@@ -459,9 +459,9 @@
     )
 )
 
-;; Returns true if this registration has remaining cycles left, its next claim
-;; distribution is strictly before the current distribution cycle, and
-;; calculate-rewards has covered that claim distribution.
+;; Returns true if this registration's next claim distribution is strictly
+;; before the current distribution cycle, and calculate-rewards has covered
+;; that claim distribution.
 (define-private (is-pending
         (registration {
             remaining-claims: uint,
@@ -475,7 +475,6 @@
         (last-compute-distribution (optional uint))
     )
     (and
-        (> (get remaining-claims registration) u0)
         (< (get next-claim-distribution registration) current-distribution-cycle)
         (rewards-calculated-for-claim-distribution (get next-claim-distribution registration)
             last-compute-distribution
@@ -853,7 +852,7 @@
 ;; Fold step for register-many-for-claims: match each register-for-claims-impl
 ;; result so a skip or failure doesn't abort the batch. Prints a skip event on
 ;; failure. Returns the count in the accumulator's registered field.
-(define-private (count-registations
+(define-private (count-registrations
         (entry {
             staker: principal,
             start-reward-cycle: uint,
@@ -924,8 +923,12 @@
         (one-claim-per-reward-cycle bool)
         (fee uint)
     )
-    (register-for-claims-impl staker (contract-of signer-manager) start-reward-cycle
-        one-claim-per-reward-cycle fee
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (register-for-claims-impl staker (contract-of signer-manager) start-reward-cycle
+            one-claim-per-reward-cycle fee
+        )
     )
 )
 
@@ -942,7 +945,7 @@
 ;;   returned ok.
 (define-public (register-many-for-claims
         (signer-manager <reward-claim-signer-manager-trait>)
-        (stakers (list 100
+        (stakers (list 50
             {
                 staker: principal,
                 start-reward-cycle: uint,
@@ -951,12 +954,16 @@
             }
         ))
     )
-    (ok (get registered
-        (fold count-registations stakers {
-            signer: (contract-of signer-manager),
-            registered: u0,
-        })
-    ))
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (ok (get registered
+            (fold count-registrations stakers {
+                signer: (contract-of signer-manager),
+                registered: u0,
+            })
+        ))
+    )
 )
 
 ;; Buy additional claim installments for an existing registration. Only the
@@ -991,6 +998,7 @@
                 signer-manager: signer-manager,
             })
         )
+        (try! (validate-no-reentrancy))
         (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
         ;; Fail before escrowing if this key is not registered or caller is not the sponsor.
         (let ((existing (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED)))
@@ -1317,7 +1325,6 @@
             (reward-cycle (/ claim-distribution u2))
             (bond-index (get bond-index registration))
         )
-        (asserts! (> (get remaining-claims registration) u0) ERR_NOT_REGISTERED)
         (asserts! (< claim-distribution current-distribution-cycle) ERR_ALREADY_CLAIMED)
         (asserts!
             (rewards-calculated-for-claim-distribution claim-distribution last-compute-distribution)
