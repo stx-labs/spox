@@ -684,6 +684,35 @@ export function addClaims(
   );
 }
 
+export function cancelRegistration(
+  staker: string,
+  sender: string,
+  signerManager: string,
+) {
+  return simnet.callPublicFn(
+    "reward-claim-registry",
+    "cancel-registration",
+    [Cl.principal(staker), Cl.principal(signerManager)],
+    sender,
+  );
+}
+
+export function cancelManyRegistrations(
+  stakers: string[],
+  sender: string,
+  signerManager: string,
+) {
+  return simnet.callPublicFn(
+    "reward-claim-registry",
+    "cancel-many-registrations",
+    [
+      Cl.principal(signerManager),
+      Cl.list(stakers.map((staker) => Cl.principal(staker))),
+    ],
+    sender,
+  );
+}
+
 export function processRewardClaim(
   staker: string,
   sender: string,

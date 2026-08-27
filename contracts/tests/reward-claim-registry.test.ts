@@ -22,6 +22,7 @@ import {
   REENTER_REGISTER,
   REENTER_SETTLE,
   addClaims,
+  cancelManyRegistrations,
   MOCK_SIGNER_MANAGER,
   SIGNER_MANAGER,
   SIGNER_PRIVATE_KEY,
@@ -817,6 +818,97 @@ describe("cancel-registration", () => {
       ).result,
     ).toBeOk(Cl.bool(true));
     expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
+  });
+});
+
+describe("cancel-many-registrations", () => {
+  beforeEach(() => {
+    initPox5();
+    registerSignerManager(SIGNER_PRIVATE_KEY);
+    stakeFor(wallet1, SIGNER_SET_MIN_USTX, 2n);
+    stakeFor(wallet2, SIGNER_SET_MIN_USTX, 2n);
+  });
+
+  it("cancels multiple registrations and returns the count", () => {
+    registerForClaims(wallet1, 3n * FEE_PER_CLAIM, wallet3, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet2, 2n * FEE_PER_CLAIM, wallet3, SIGNER_MANAGER, STX_START, true);
+
+    const before = stxBalance(wallet3);
+    const { result } = cancelManyRegistrations([wallet1, wallet2], wallet3, SIGNER_MANAGER);
+    expect(result).toBeOk(Cl.uint(2));
+    expect(stxBalance(wallet3) - before).toBe(5n * FEE_PER_CLAIM);
+    expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeNone();
+    expect(getRegistration(wallet2, SIGNER_MANAGER)).toBeNone();
+  });
+
+  it("lets the staker cancel their own rows in a batch", () => {
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet3, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet2, FEE_PER_CLAIM, wallet3, SIGNER_MANAGER, STX_START, true);
+
+    const beforeSponsor = stxBalance(wallet3);
+    expect(
+      cancelManyRegistrations([wallet1], wallet1, SIGNER_MANAGER).result,
+    ).toBeOk(Cl.uint(1));
+    expect(stxBalance(wallet3) - beforeSponsor).toBe(FEE_PER_CLAIM);
+    expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeNone();
+    expect(getRegistration(wallet2, SIGNER_MANAGER)).toBeSome(
+      stxRegistration(1n, STX_FIRST_CLAIM_DIST, FEE_PER_CLAIM, wallet3),
+    );
+  });
+
+  it("returns zero when the staker list is empty", () => {
+    expect(
+      cancelManyRegistrations([], wallet3, SIGNER_MANAGER).result,
+    ).toBeOk(Cl.uint(0));
+  });
+
+  it("skips unregistered and unauthorized stakers without aborting the batch", () => {
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet2, FEE_PER_CLAIM, wallet2, SIGNER_MANAGER, STX_START, true);
+
+    // wallet3 is not staker or sponsor for either row; wallet1 can cancel own row only.
+    expect(
+      cancelManyRegistrations([wallet1, wallet2, wallet3], wallet1, SIGNER_MANAGER).result,
+    ).toBeOk(Cl.uint(1));
+    expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeNone();
+    expect(getRegistration(wallet2, SIGNER_MANAGER)).toBeSome(
+      stxRegistration(1n, STX_FIRST_CLAIM_DIST, FEE_PER_CLAIM, wallet2),
+    );
+  });
+
+  it("cancels 50 stakers in one call", () => {
+    const TOTAL = 50;
+    const stakers = Array.from({ length: TOTAL }, (_, i) => {
+      const hex = (BigInt(i) + 1n).toString(16).padStart(64, "0") + "01";
+      return privateKeyToAddress(hex, "testnet");
+    });
+
+    for (const staker of stakers) {
+      expect(
+        simnet.transferSTX(SIGNER_SET_MIN_USTX + 1_000_000n, staker, deployer).result,
+      ).toBeOk(Cl.bool(true));
+      stakeFor(staker, SIGNER_SET_MIN_USTX, 2n);
+    }
+
+    expect(
+      registerManyForClaims(
+        stakers.map((staker) => ({
+          staker,
+          fee: FEE_PER_CLAIM,
+          startRewardCycle: STX_START,
+          oneClaimPerRewardCycle: true,
+        })),
+        wallet3,
+        SIGNER_MANAGER,
+      ).result,
+    ).toBeOk(Cl.uint(TOTAL));
+
+    const before = stxBalance(wallet3);
+    const { result } = cancelManyRegistrations(stakers, wallet3, SIGNER_MANAGER);
+    expect(result).toBeOk(Cl.uint(TOTAL));
+    expect(stxBalance(wallet3) - before).toBe(BigInt(TOTAL) * FEE_PER_CLAIM);
+    expect(getRegistration(stakers[0]!, SIGNER_MANAGER)).toBeNone();
+    expect(getRegistration(stakers[TOTAL - 1]!, SIGNER_MANAGER)).toBeNone();
   });
 });
 
