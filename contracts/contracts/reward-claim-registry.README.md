@@ -1,6 +1,6 @@
 # Reward Claim Registry
 
-Permissionless keeper contract that registers PoX-5 stakers for automated reward claims via their signer-manager. Anyone (the staker, a pool operator, or an admin) may `register-for-claims` or `register-many-for-claims`; `tx-sender` is stored as `sponsor`. They choose a `start-reward-cycle` and whether to claim at most once or twice per reward cycle (`one-claim-per-reward-cycle`). spox later calls `process-reward-claim(s)` to pull rewards from pox-5 when needed, claim for the staker, and advance the schedule. Each advance burns one installment from escrow. L1 sBTC withdrawals are tracked and settled separately.
+Permissionless keeper contract that registers PoX-5 stakers for automated reward claims via their signer-manager. Anyone (the staker, a pool operator, or an admin) may `register-for-claims` or `register-many-for-claims`; `tx-sender` is stored as `sponsor`. They choose a `start-reward-cycle`, whether to claim at most once or twice per reward cycle, and how many claim installments they want. spox later calls `process-reward-claims` to pull rewards from pox-5 when needed, claim for the staker, and advance the schedule. Each advance burns one installment from escrow. L1 sBTC withdrawals are tracked and settled separately.
 
 ## Invariants
 
