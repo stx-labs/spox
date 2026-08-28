@@ -932,13 +932,13 @@
     )
 )
 
-;; Register up to 100 stakers under the same signer-manager in one call.
+;; Register up to 50 stakers under the same signer-manager in one call.
 ;; Runs register-for-claims-impl per entry. 
 ;;
 ;; Note that a failure for any entry does not abort the batch and print
 ;; events are emitted for both successful and failed registrations.
 ;;
-;; Ssee register-for-claims parameters documentation.
+;; See register-for-claims parameters documentation.
 ;;
 ;; Returns:
 ;;   ok with the number of stakers for which register-for-claims-impl
