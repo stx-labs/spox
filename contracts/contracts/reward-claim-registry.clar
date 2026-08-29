@@ -902,7 +902,7 @@
 ;; Returns:
 ;;   ok with num-claims, or an error if num-claims is zero or too large, a
 ;;   registration already exists, the stake does not exist or exists under a different
-;;   signer, or start-reward-cycle is before the stakes's first-reward-cycle.
+;;   signer, or start-reward-cycle is before the stake's first-reward-cycle.
 (define-public (register-for-claims
         (staker principal)
         (signer-manager <reward-claim-signer-manager-trait>)
