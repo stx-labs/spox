@@ -15,7 +15,7 @@ Permissionless keeper contract that registers PoX-5 stakers for automated reward
 - **One sponsor per registration.** Only that `sponsor` (as `tx-sender`) may `add-claims`. Cancel is the staker or the sponsor (matched as `tx-sender`); remaining `prepaid-ustx` is refunded to the sponsor.
 - **add-claims preserves schedule.** Buying more installments for `{staker, signer-manager}` only increases `remaining-claims` and `prepaid-ustx`. Re-registering the same key fails with `ERR_ALREADY_REGISTERED`.
 - **Batch registration / cancel are best-effort.** Failed entries are skipped without aborting the batch.
-- **Max processed distribution.** On each claim the registry stores maximum distribution cycle processed by the registry. This makes registering under a different signer-manager easier for users, since they can consult this map to see what reward cycles have been processed.
+- **Max processed distribution.** On each claim the registry stores the maximum distribution cycle processed by the registry. This makes registering under a different signer-manager easier for users, since they can consult this map to see how far the registry has progressed.
 
 ## Gotchas
 
