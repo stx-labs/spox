@@ -68,6 +68,7 @@ import {
   stakeFor,
   stakeForMalicious,
   stakeForMock,
+  stakeUpdate,
   stakeWithPoxAddr,
   stxBalance,
   wallet1,
@@ -915,6 +916,36 @@ describe("max-processed-distribution", () => {
     mineUntilPastDistribution(STX_FIRST_CLAIM_DIST + 2n);
     expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
     expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST + 2n));
+  });
+
+  it("persists across signer-manager switch via stake-update", () => {
+    registerMockSignerManager();
+    registerForClaims(wallet1, 3n, wallet1, SIGNER_MANAGER, STX_START, true);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+
+    const update = stakeUpdate(wallet1, MOCK_SIGNER_MANAGER, SIGNER_MANAGER, 1n);
+    expect(cvToJSON(update.result)).toMatchObject({ success: true });
+
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+
+    const nextRewardCycle = STX_START + 1n;
+    const nextClaimDist = initialNextClaimDistribution(nextRewardCycle, true);
+    expect(STX_FIRST_CLAIM_DIST).toBeLessThan(nextClaimDist);
+    expect(
+      registerForClaims(wallet1, 1n, wallet1, MOCK_SIGNER_MANAGER, nextRewardCycle, true).result,
+    ).toBeOk(Cl.uint(1));
+    expect(getRegistration(wallet1, MOCK_SIGNER_MANAGER)).toBeSome(
+      stxRegistration(1n, nextClaimDist),
+    );
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+
+    fundAndCalculateRewards(2000n, nextRewardCycle);
+    mineUntilPastDistribution(nextClaimDist);
+    expect(processRewardClaim(wallet1, wallet1, MOCK_SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(nextClaimDist));
+    expect(getRegistration(wallet1, MOCK_SIGNER_MANAGER)).toBeNone();
   });
 });
 
