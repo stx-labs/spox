@@ -181,6 +181,23 @@
     })
 )
 
+;; The highest distribution cycle processed for a staker in this registry.
+;; This is useful when a staker wants to change their signer-manager and
+;; wants to continue from where they left off.
+(define-map max-processed-distribution principal uint)
+
+;; Look up the maximum distribution cycle processed for a staker.
+;;
+;; Parameters:
+;;   staker  The staker principal.
+;;
+;; Returns:
+;;   The greatest distribution cycle processed for this staker, or none if no
+;;   claim has been processed by this registry yet.
+(define-read-only (get-max-processed-distribution (staker principal))
+    (map-get? max-processed-distribution staker)
+)
+
 (define-map registration-ll
     {
         staker: principal,
@@ -282,6 +299,22 @@
                 (* u2 (+ reward-cycle u1))
                 (+ claim-distribution u1)
             )
+        )
+    )
+)
+
+;; Raise the staker's max-processed distribution cycle to at least
+;; `distribution`.
+;;
+;; #[allow(unchecked_data)]
+(define-private (record-max-processed-distribution
+        (staker principal)
+        (distribution uint)
+    )
+    (map-set max-processed-distribution staker
+        (match (map-get? max-processed-distribution staker)
+            existing (if (> distribution existing) distribution existing)
+            distribution
         )
     )
 )
@@ -1161,6 +1194,9 @@
             ))
         )
         (begin
+            (record-max-processed-distribution (get staker key)
+                (get next-claim-distribution registration)
+            )
             (if (> burn-amount u0)
                 (try! (as-contract? ((with-stx burn-amount))
                     (try! (stx-burn? burn-amount current-contract))

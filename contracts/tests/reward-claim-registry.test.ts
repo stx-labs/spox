@@ -42,6 +42,7 @@ import {
   getWithdrawals,
   getEarned,
   getMaliciousLastReenterError,
+  getMaxProcessedDistribution,
   getRegistration,
   initialNextClaimDistribution,
   initPox5,
@@ -838,6 +839,82 @@ describe("cancel-registration", () => {
       ).result,
     ).toBeOk(Cl.bool(true));
     expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
+  });
+});
+
+describe("max-processed-distribution", () => {
+  beforeEach(() => {
+    initPox5();
+    registerSignerManager(SIGNER_PRIVATE_KEY);
+    stakeFor(wallet1, SIGNER_SET_MIN_USTX, 2n);
+  });
+
+  it("returns none before any claim is processed", () => {
+    expect(getMaxProcessedDistribution(wallet1)).toBeNone();
+    registerForClaims(wallet1, 3n, wallet1, SIGNER_MANAGER, STX_START, true);
+    expect(getMaxProcessedDistribution(wallet1)).toBeNone();
+  });
+
+  it("does not update on cancel without a processed claim", () => {
+    registerForClaims(wallet1, 3n, wallet1, SIGNER_MANAGER, STX_START, true);
+    expect(
+      simnet.callPublicFn(
+        "reward-claim-registry",
+        "cancel-registration",
+        [Cl.principal(wallet1), Cl.principal(SIGNER_MANAGER)],
+        wallet1,
+      ).result,
+    ).toBeOk(Cl.uint(3n * FEE_PER_CLAIM));
+    expect(getMaxProcessedDistribution(wallet1)).toBeNone();
+  });
+
+  it("records the processed distribution on claim", () => {
+    registerForClaims(wallet1, 3n, wallet1, SIGNER_MANAGER, STX_START, true);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+  });
+
+  it("persists after cancel following a claim", () => {
+    registerForClaims(wallet1, 3n, wallet1, SIGNER_MANAGER, STX_START, true);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(
+      simnet.callPublicFn(
+        "reward-claim-registry",
+        "cancel-registration",
+        [Cl.principal(wallet1), Cl.principal(SIGNER_MANAGER)],
+        wallet1,
+      ).result,
+    ).toBeOk(Cl.uint(2n * FEE_PER_CLAIM));
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+  });
+
+  it("records the processed distribution on the final installment", () => {
+    registerStxAndAdvance(wallet1, 1n);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeNone();
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+  });
+
+  it("persists after re-register", () => {
+    registerStxAndAdvance(wallet1, 1n);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+
+    registerForClaims(wallet1, 1n, wallet1, SIGNER_MANAGER, STX_START, true);
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+  });
+
+  it("never decreases across multiple claims", () => {
+    registerForClaims(wallet1, 3n, wallet1, SIGNER_MANAGER, STX_START, true);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST));
+
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST + 2n);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+    expect(getMaxProcessedDistribution(wallet1)).toBeSome(Cl.uint(STX_FIRST_CLAIM_DIST + 2n));
   });
 });
 

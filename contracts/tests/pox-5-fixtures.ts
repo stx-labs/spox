@@ -735,6 +735,15 @@ export function getRegistration(staker: string, signerManager: string) {
   ).result;
 }
 
+export function getMaxProcessedDistribution(staker: string) {
+  return simnet.callReadOnlyFn(
+    "reward-claim-registry",
+    "get-max-processed-distribution",
+    [Cl.principal(staker)],
+    deployer,
+  ).result;
+}
+
 export function getPendingClaims(cursor: OptionalCV = Cl.none()) {
   return simnet.callReadOnlyFn(
     "reward-claim-registry",
