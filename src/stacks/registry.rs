@@ -1,16 +1,15 @@
 //! Client for the on-chain deposit address registry.
 
-use std::collections::BTreeMap;
-
 use bitcoin::ScriptBuf;
 use clarity::types::chainstate::StacksAddress;
 use clarity::vm::types::{
-    ListData, ListTypeData, OptionalData, QualifiedContractIdentifier, SequenceData, TupleData,
+    ListData, ListTypeData, QualifiedContractIdentifier, SequenceData, TupleData,
 };
 use clarity::vm::{ClarityName, ContractName, Value};
 use sbtc::deposits::{DepositScriptInputs, ReclaimScriptInputs};
 
 use crate::error::Error;
+use crate::stacks::clarity::ClarityTuple;
 use crate::stacks::node::StacksClient;
 use crate::storage::model::{MonitoredDeposit, MonitoredDepositSource};
 
@@ -129,12 +128,14 @@ impl DepositAddressRegistry {
 impl TryFrom<Value> for RawRegisteredDepositScripts {
     type Error = Error;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let Value::Tuple(TupleData { mut data_map, .. }) = value else {
+        let Value::Tuple(TupleData { data_map, .. }) = value else {
             return Err(Error::InvalidStacksResponse("did not get an address tuple"));
         };
 
-        let deposit_script = tuple_remove_buff(&mut data_map, "deposit-script")?;
-        let reclaim_script = tuple_remove_buff(&mut data_map, "reclaim-script")?;
+        let mut clarity_map = ClarityTuple::new(data_map);
+
+        let deposit_script = clarity_map.remove_buff("deposit-script")?;
+        let reclaim_script = clarity_map.remove_buff("reclaim-script")?;
         Ok(RawRegisteredDepositScripts { deposit_script, reclaim_script })
     }
 }
@@ -142,13 +143,12 @@ impl TryFrom<Value> for RawRegisteredDepositScripts {
 impl TryFrom<Value> for RawRegisteredDeposit {
     type Error = Error;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let Value::Tuple(TupleData { mut data_map, .. }) = value else {
-            return Err(Error::InvalidStacksResponse("did not get a tuple"));
-        };
+        let mut clarity_map = ClarityTuple::try_from(value)?;
 
-        let id = tuple_remove_uint(&mut data_map, "id")?;
-        let address = tuple_remove_option(&mut data_map, "address")?
-            .map(|value| RawRegisteredDepositScripts::try_from(*value))
+        let id = clarity_map.remove_uint("id")?;
+        let address = clarity_map
+            .remove_option("address")?
+            .map(RawRegisteredDepositScripts::try_from)
             .transpose()?;
 
         Ok(RawRegisteredDeposit {
@@ -178,40 +178,11 @@ impl TryFrom<RawRegisteredDeposit> for MonitoredDeposit {
     }
 }
 
-fn tuple_remove_uint(
-    data_map: &mut BTreeMap<ClarityName, Value>,
-    field: &'static str,
-) -> Result<u128, Error> {
-    match data_map.remove(field) {
-        Some(Value::UInt(data)) => Ok(data),
-        _ => Err(Error::ClarityMissingTupleEntry(field)),
-    }
-}
-
-fn tuple_remove_option(
-    data_map: &mut BTreeMap<ClarityName, Value>,
-    field: &'static str,
-) -> Result<Option<Box<Value>>, Error> {
-    match data_map.remove(field) {
-        Some(Value::Optional(OptionalData { data })) => Ok(data),
-        _ => Err(Error::ClarityMissingTupleEntry(field)),
-    }
-}
-
-fn tuple_remove_buff(
-    data_map: &mut BTreeMap<ClarityName, Value>,
-    field: &'static str,
-) -> Result<Vec<u8>, Error> {
-    match data_map.remove(field) {
-        Some(Value::Sequence(SequenceData::Buffer(buf))) => Ok(buf.data),
-        _ => Err(Error::ClarityMissingTupleEntry(field)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bitcoin::{NetworkKind, PrivateKey, PublicKey, secp256k1::SECP256K1};
     use bitcoincore_rpc::jsonrpc::serde_json;
+    use clarity::vm::types::OptionalData;
     use clarity::{types::StacksEpochId, vm::types::PrincipalData};
 
     use super::*;
