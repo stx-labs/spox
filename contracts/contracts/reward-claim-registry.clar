@@ -619,7 +619,7 @@
 ;; registrations.
 ;;
 ;; Parameters:
-;;   cursor  none to start at the head, or the `some` to start at the 
+;;   cursor  none to start at the head, or (some key) to start at the 
 ;;           supplied key.
 ;;
 ;; Returns:
