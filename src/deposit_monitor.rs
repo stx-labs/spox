@@ -5,12 +5,16 @@ use std::num::NonZeroUsize;
 use std::str::FromStr as _;
 
 use bitcoin::{BlockHash, ScriptBuf, Txid};
+use emily_client::apis::deposit_api;
 use emily_client::models::CreateDepositRequestBody;
 use lru::LruCache;
+use tokio::sync::mpsc;
 
+use crate::bitcoin::wallet::import_descriptors;
 use crate::bitcoin::{BlockRef, Utxo};
 use crate::context::Context;
 use crate::error::Error;
+use crate::stacks::registry::GET_ADDRESSES_MAX_IDS;
 use crate::storage::Storage as _;
 
 /// Deposit monitor
@@ -202,4 +206,125 @@ impl DepositMonitor {
             }
         };
     }
+}
+
+/// The loop for processing monitored deposits whenever a new Bitcoin block
+/// is detected.
+pub async fn process_monitored_deposits(mut rx: mpsc::Receiver<BlockRef>, context: Context) {
+    let mut deposit_monitor = DepositMonitor::new(context.clone());
+
+    while let Some(chain_tip) = rx.recv().await {
+        if let Err(error) = update_from_registry(&context).await {
+            tracing::warn!(%error, "error updating from address registry");
+        }
+
+        if let Err(error) = update_wallet(&context) {
+            tracing::warn!(%error, "error updating the wallet");
+        }
+
+        if let Err(error) =
+            fetch_and_create_deposits(&context, &mut deposit_monitor, &chain_tip).await
+        {
+            tracing::warn!(%error, "error processing pending deposits");
+        }
+    }
+}
+
+async fn update_from_registry(context: &Context) -> Result<(), Error> {
+    let Some(registry) = context.registry() else {
+        return Ok(());
+    };
+    let store = context.storage();
+
+    let last_next_id = store.get_last_next_address_id()?;
+    let registry_next_id = registry.get_next_address_id().await?;
+
+    if last_next_id >= registry_next_id {
+        return Ok(());
+    }
+
+    // TODO: limit the amount of work per single function invocation
+    for start in (last_next_id..registry_next_id).step_by(GET_ADDRESSES_MAX_IDS as usize) {
+        let end = start
+            .saturating_add(GET_ADDRESSES_MAX_IDS as u64)
+            .min(registry_next_id);
+        let ids: Vec<u64> = (start..end).collect();
+        let deposit_addresses = registry.get_addresses(&ids).await?;
+
+        let deposit_addresses_ids: Vec<u64> = deposit_addresses.iter().map(|v| v.id).collect();
+        if ids != deposit_addresses_ids {
+            return Err(Error::MismatchingRawAddressIds);
+        }
+
+        for raw_deposit_address in deposit_addresses {
+            let address_id = raw_deposit_address.id;
+            match raw_deposit_address.try_into() {
+                Ok(deposit_address) => {
+                    store.add(deposit_address)?;
+                    tracing::info!(address_id, "added new address from registry");
+                }
+                Err(Error::MissingAddressScripts) => {
+                    tracing::debug!(address_id, "skipping empty address id");
+                }
+                Err(error) => tracing::warn!(
+                    %error,
+                    address_id,
+                    "cannot parse deposit address"
+                ),
+            };
+            store.set_last_next_address_id(address_id.saturating_add(1))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn update_wallet(context: &Context) -> Result<(), Error> {
+    let Some(ref wallet) = context.settings().node_wallet else {
+        return Ok(());
+    };
+
+    let script_pubkeys = context.storage().get_scripts()?;
+    if script_pubkeys.is_empty() {
+        return Ok(());
+    }
+
+    let timestamp = wallet.get_rescan_timestamp()?;
+
+    import_descriptors(context.bitcoin_client(), &script_pubkeys, timestamp)
+}
+
+async fn fetch_and_create_deposits(
+    context: &Context,
+    deposit_monitor: &mut DepositMonitor,
+    chain_tip: &BlockRef,
+) -> Result<(), Error> {
+    let emily_config = context.emily_config();
+
+    let deposits = deposit_monitor.get_pending_deposits(chain_tip)?;
+
+    tracing::debug!(count = deposits.len(), "fetched pending deposits");
+    if deposits.is_empty() {
+        return Ok(());
+    }
+
+    for deposit in deposits {
+        if let Err(error) = deposit_api::create_deposit(emily_config, deposit.clone()).await {
+            tracing::warn!(
+                %error,
+                txid = %deposit.bitcoin_txid,
+                vout = %deposit.bitcoin_tx_output_index,
+                "cannot create deposit in emily"
+            );
+        } else {
+            tracing::info!(
+                txid = %deposit.bitcoin_txid,
+                vout = %deposit.bitcoin_tx_output_index,
+                "created deposit in emily"
+            );
+            deposit_monitor.deposit_created(&deposit.bitcoin_txid, deposit.bitcoin_tx_output_index);
+        }
+    }
+
+    Ok(())
 }

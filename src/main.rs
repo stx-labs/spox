@@ -1,18 +1,17 @@
 use std::path::PathBuf;
-use std::time::Duration;
 
 use bitcoin::Address;
 use clap::{Parser, Subcommand, ValueEnum};
-use emily_client::apis::deposit_api;
-use spox::bitcoin::BlockRef;
-use spox::bitcoin::wallet::{import_descriptors, load_or_create_wallet};
+use spox::bitcoin::chain_tip::BitcoinChainTipPoller;
+use spox::bitcoin::wallet::load_or_create_wallet;
 use spox::config::Settings;
 use spox::context::Context;
-use spox::deposit_monitor::DepositMonitor;
+use spox::deposit_monitor::process_monitored_deposits;
+use spox::dispatch::run_on_chain_tips;
 use spox::error::Error;
+use spox::reward_claim_process::process_reward_claims;
 use spox::stacks::node::StacksClient;
-use spox::stacks::registry::GET_ADDRESSES_MAX_IDS;
-use spox::storage::Storage;
+use spox::storage::Storage as _;
 use spox::storage::model::{MonitoredDeposit, MonitoredDepositSource};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -56,154 +55,6 @@ struct Args {
 
     #[clap(short = 'o', long = "output-format", default_value = "pretty")]
     output_format: LogOutputFormat,
-}
-
-async fn fetch_and_create_deposits(
-    context: &Context,
-    deposit_monitor: &mut DepositMonitor,
-    chain_tip: &BlockRef,
-) -> Result<(), Error> {
-    let emily_config = context.emily_config();
-
-    let deposits = deposit_monitor.get_pending_deposits(chain_tip)?;
-
-    tracing::debug!(count = deposits.len(), "fetched pending deposits");
-    if deposits.is_empty() {
-        return Ok(());
-    }
-
-    for deposit in deposits {
-        if let Err(error) = deposit_api::create_deposit(emily_config, deposit.clone()).await {
-            tracing::warn!(
-                %error,
-                txid = %deposit.bitcoin_txid,
-                vout = %deposit.bitcoin_tx_output_index,
-                "cannot create deposit in emily"
-            );
-        } else {
-            tracing::info!(
-                txid = %deposit.bitcoin_txid,
-                vout = %deposit.bitcoin_tx_output_index,
-                "created deposit in emily"
-            );
-            deposit_monitor.deposit_created(&deposit.bitcoin_txid, deposit.bitcoin_tx_output_index);
-        }
-    }
-
-    Ok(())
-}
-
-async fn update_from_registry(context: &Context) -> Result<(), Error> {
-    let Some(registry) = context.registry() else {
-        return Ok(());
-    };
-    let store = context.storage();
-
-    let last_next_id = store.get_last_next_address_id()?;
-    let registry_next_id = registry.get_next_address_id().await?;
-
-    if last_next_id >= registry_next_id {
-        return Ok(());
-    }
-
-    // TODO: limit the amount of work per single function invocation
-    for start in (last_next_id..registry_next_id).step_by(GET_ADDRESSES_MAX_IDS as usize) {
-        let end = start
-            .saturating_add(GET_ADDRESSES_MAX_IDS as u64)
-            .min(registry_next_id);
-        let ids: Vec<u64> = (start..end).collect();
-        let deposit_addresses = registry.get_addresses(&ids).await?;
-
-        let deposit_addresses_ids: Vec<u64> = deposit_addresses.iter().map(|v| v.id).collect();
-        if ids != deposit_addresses_ids {
-            return Err(Error::MismatchingRawAddressIds);
-        }
-
-        for raw_deposit_address in deposit_addresses {
-            let address_id = raw_deposit_address.id;
-            match raw_deposit_address.try_into() {
-                Ok(deposit_address) => {
-                    store.add(deposit_address)?;
-                    tracing::info!(address_id, "added new address from registry");
-                }
-                Err(Error::MissingAddressScripts) => {
-                    tracing::debug!(address_id, "skipping empty address id");
-                }
-                Err(error) => tracing::warn!(
-                    %error,
-                    address_id,
-                    "cannot parse deposit address"
-                ),
-            };
-            store.set_last_next_address_id(address_id.saturating_add(1))?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn runloop(
-    context: Context,
-    deposit_monitor: &mut DepositMonitor,
-    polling_interval: Duration,
-) {
-    let bitcoin_client = context.bitcoin_client();
-    let mut first_poll = true;
-    let mut last_chain_tip = None;
-
-    loop {
-        if first_poll {
-            first_poll = false;
-        } else {
-            tokio::time::sleep(polling_interval).await;
-        }
-
-        let chain_tip = match bitcoin_client.get_chain_tip() {
-            Ok(chain_tip) => chain_tip,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "error getting the chain tip"
-                );
-                continue;
-            }
-        };
-
-        let is_last_chaintip = last_chain_tip
-            .as_ref()
-            .is_some_and(|last| last == &chain_tip);
-
-        if is_last_chaintip {
-            continue;
-        }
-
-        tracing::debug!(%chain_tip, "new block; processing pending deposits");
-
-        let _ = update_from_registry(&context).await.inspect_err(|error| {
-            tracing::warn!(
-                %error,
-                "error updating from address registry"
-            )
-        });
-
-        let _ = update_wallet(&context).inspect_err(|error| {
-            tracing::warn!(
-                %error,
-                "error updating the wallet"
-            )
-        });
-
-        let _ = fetch_and_create_deposits(&context, deposit_monitor, &chain_tip)
-            .await
-            .inspect_err(|error| {
-                tracing::warn!(
-                    %error,
-                    "error processing pending deposits"
-                )
-            });
-
-        last_chain_tip = Some(chain_tip);
-    }
 }
 
 async fn get_signers_xonly_key(config: &Settings) -> Result<(), Box<dyn std::error::Error>> {
@@ -259,21 +110,6 @@ async fn get_registry_address(
     Ok(())
 }
 
-fn update_wallet(context: &Context) -> Result<(), Error> {
-    let Some(ref wallet) = context.settings().node_wallet else {
-        return Ok(());
-    };
-
-    let script_pubkeys = context.storage().get_scripts()?;
-    if script_pubkeys.is_empty() {
-        return Ok(());
-    }
-
-    let timestamp = wallet.get_rescan_timestamp()?;
-
-    import_descriptors(context.bitcoin_client(), &script_pubkeys, timestamp)
-}
-
 fn setup_wallet(context: &Context) -> Result<(), Error> {
     let Some(ref wallet) = context.settings().node_wallet else {
         return Ok(());
@@ -323,9 +159,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     setup_wallet(&context)?;
 
-    let mut deposit_monitor = DepositMonitor::new(context.clone());
+    let bitcoin_rpc = context.bitcoin_client().clone();
+    let chain_tip_poller = BitcoinChainTipPoller::start(bitcoin_rpc, config.polling_interval).await;
+    let rx1 = chain_tip_poller.new_receiver();
+    let rx2 = chain_tip_poller.new_receiver();
 
-    runloop(context, &mut deposit_monitor, config.polling_interval).await;
+    tokio::join!(
+        run_on_chain_tips(process_monitored_deposits, rx1, context.clone()),
+        run_on_chain_tips(process_reward_claims, rx2, context),
+    );
 
     Ok(())
 }

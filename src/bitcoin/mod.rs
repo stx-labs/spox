@@ -2,11 +2,12 @@
 
 use bitcoin;
 
+pub mod chain_tip;
 pub mod node;
 pub mod wallet;
 
 /// Bitcoin chain tip
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct BlockRef {
     /// The height of the block in the bitcoin blockchain.
     pub block_height: u64,
