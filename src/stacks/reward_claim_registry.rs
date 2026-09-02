@@ -132,8 +132,7 @@ pub struct PendingClaimsPage {
     /// Cursor to pass to the next `get_pending_claims` call.
     ///
     /// `None` means the walk reached the tail of the registration list.
-    /// `Some` is the last visited registration key, which may not be a
-    /// pending claim itself.
+    /// `Some` is the first registration key not visited this page.
     pub next: Option<RegistrationKey>,
 }
 
@@ -238,8 +237,7 @@ pub struct PendingWithdrawalsPage {
     /// Cursor to pass to the next `get_pending_withdrawals` call.
     ///
     /// `None` means the walk reached the tail of the pending-withdrawal
-    /// list. `Some` is the last visited withdrawal key, which may not be
-    /// a settleable row itself.
+    /// list. `Some` is the first key not visited this page.
     pub next: Option<WithdrawalKey>,
 }
 
@@ -394,8 +392,8 @@ impl RewardClaimRegistry {
     ///
     /// Pass `None` for `cursor` to start at the head of the registration
     /// linked list. To paginate, pass [`PendingClaimsPage::next`] from the
-    /// previous page. `next == None` means the walk reached the tail; an
-    /// empty `claims` list alone does not.
+    /// previous page to resume at that key. `next == None` means the
+    /// walk reached the tail; an empty `claims` list alone does not.
     async fn get_pending_claims(
         &self,
         cursor: Option<&RegistrationKey>,
