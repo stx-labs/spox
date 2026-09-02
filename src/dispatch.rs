@@ -35,6 +35,12 @@ where
         };
 
         if let Err(error) = sender.try_send(chain_tip) {
+            // The receiver could be dropped, in which case we know that we
+            // are done and can exit.
+            if sender.is_closed() {
+                tracing::info!("bitcoin chain tip processor closed, stopping dispatch");
+                break;
+            }
             tracing::warn!(%error, "error sending new bitcoin chain tip to processor");
         }
     }

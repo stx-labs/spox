@@ -17,6 +17,11 @@ use crate::error::Error;
 /// The loop for processing reward claims that runs whenever a new Bitcoin
 /// block is detected.
 pub async fn process_reward_claims(mut rx: mpsc::Receiver<BlockRef>, context: Context) {
+    if context.settings().reward_claims.is_none() {
+        tracing::info!("reward claims are not configured, skipping");
+        return;
+    }
+
     while let Some(chain_tip) = rx.recv().await {
         if let Err(error) = process_pending_claims(&context, &chain_tip).await {
             tracing::warn!(%error, "error processing pending reward claims");

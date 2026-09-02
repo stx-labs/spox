@@ -139,19 +139,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(TryInto::try_into)
         .collect::<Result<Vec<_>, Error>>()?;
 
-    let context = Context::try_from(&config)?;
-
     match args.command {
         Some(CliCommand::GetSignersXonlyKey) => return get_signers_xonly_key(&config).await,
         Some(CliCommand::GetDepositAddress(args)) => {
             return get_deposit_address(&monitored, &args).await;
         }
         Some(CliCommand::GetRegistryAddress(args)) => {
+            let context = Context::try_from(&config)?;
             return get_registry_address(&context, &args).await;
         }
         None => (),
     }
 
+    let context = Context::try_from(&config)?;
     let store = context.storage();
     for monitored_deposit in monitored {
         store.add(monitored_deposit)?;

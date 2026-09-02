@@ -20,4 +20,4 @@ pub mod testing;
 ///
 /// Each process should have their own channel to avoid blocking the main
 /// broadcast channel.
-pub const MAILBOX_CAPACITY: usize = 1024;
+pub const MAILBOX_CAPACITY: usize = 144;

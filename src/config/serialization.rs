@@ -72,6 +72,15 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+/// Parse the string into a Stacks QualifiedContractIdentifier.
+pub fn contract_deserializer<'de, D>(des: D) -> Result<QualifiedContractIdentifier, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let literal = <String>::deserialize(des)?;
+    QualifiedContractIdentifier::parse(&literal).map_err(serde::de::Error::custom)
+}
+
 /// Parse the string into a XOnlyPublicKey
 pub fn xonly_deserializer<'de, D>(des: D) -> Result<XOnlyPublicKey, D::Error>
 where
