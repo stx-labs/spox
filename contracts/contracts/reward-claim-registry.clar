@@ -1660,8 +1660,8 @@
 ;; blocks have passed since insert and sbtc-registry status indicated that
 ;; it has been accepted or rejected. Use the returned `next` cursor: none
 ;; means the walk hit the tail; some key means pass that key as the next
-;; `cursor` to resume at that key (the first node not visited this page).
-;; Rows are included whether or not their parent registration still exists.
+;; `cursor` to resume at that key. Rows are included whether or not their
+;; parent registration still exists.
 ;;
 ;; Parameters:
 ;;
