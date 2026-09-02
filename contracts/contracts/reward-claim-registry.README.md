@@ -23,4 +23,4 @@ Permissionless keeper contract that registers PoX-5 stakers for automated reward
 - Empty / failed claims still burn a claim installment from escrow.
 - The staker or the sponsor may `cancel-registration` / `cancel-many-registrations`. Remaining `prepaid-ustx` is refunded to the sponsor, not necessarily the staker. Pending L1 withdrawals remain settleable.
 - Live sBTC-pending requests are indexed one map row per `{staker, signer-manager, request-id}` regardless of who created the withdrawal. `get-pending-withdrawals` lists a row after 7 Bitcoin blocks and only if sBTC status indicates acceptance or rejection from the sbtc signer. `settle-pending-withdrawal` drops the ID once sBTC has resolved (or the request is missing), even if the signer-manager errors.
-- `get-pending-claims` and `get-pending-withdrawals` may return an empty `rows` list while `next` is still set. Paginate with `next` until it is `none`.
+- `get-pending-claims`, `get-pending-withdrawals`, `get-registrations`, and `get-withdrawals` may return an empty `rows` list while `next` is still set. Paginate with `next` until it is `none`. For all four, `next` is the first unvisited key.
