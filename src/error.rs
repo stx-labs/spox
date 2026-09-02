@@ -119,6 +119,13 @@ pub enum Error {
     #[error("response from stacks node did not conform to the expected schema: {0}")]
     UnexpectedStacksResponse(#[source] reqwest::Error),
 
+    /// This variant is for when the clarity principal returned from our
+    /// read-only call for the signer manager is not a qualitfied contract
+    /// identifier. This should never happen, seeing it means we have a bug
+    /// in the smart contract.
+    #[error("the clarity principal was not a smart contract principal")]
+    UnexpectedPrincipal(clarity::vm::types::PrincipalData),
+
     /// Unexpected local timestamp
     #[error("unexpected local timestamp")]
     UnexpectedLocalTimestamp,

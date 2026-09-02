@@ -12,6 +12,9 @@ use crate::error::Error;
 use crate::stacks::clarity::ClarityTuple;
 use crate::stacks::node::StacksClient;
 
+/// Maximum number of stakers accepted by `process-reward-claims` in one call.
+pub const MAX_STAKERS_LENGTH: usize = 100;
+
 /// Key identifying a registration in the reward claim registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistrationKey {
@@ -25,7 +28,7 @@ pub struct RegistrationKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingClaim {
     /// The signer-manager principal for this registration.
-    pub signer_manager: PrincipalData,
+    pub signer_manager: QualifiedContractIdentifier,
     /// The staker principal for this registration.
     pub staker: PrincipalData,
     /// Bond index when the staker is in a bond; `None` for STX-only stakes.
@@ -39,7 +42,7 @@ impl PendingClaim {
     pub fn registration_key(&self) -> RegistrationKey {
         RegistrationKey {
             staker: self.staker.clone(),
-            signer_manager: self.signer_manager.clone(),
+            signer_manager: PrincipalData::Contract(self.signer_manager.clone()),
         }
     }
 }
@@ -55,6 +58,21 @@ pub struct PendingClaimsPage {
     /// `Some` is the last visited registration key, which may not be a
     /// pending claim itself.
     pub next: Option<RegistrationKey>,
+}
+
+/// Arguments for one `process-reward-claims` contract call.
+///
+/// All [`Self::stakers`] share [`Self::signer_manager`], and the list
+/// length is at most [`MAX_STAKERS_LENGTH`]. (TODO: enforce this at
+/// construction time)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessRewardClaimsBatch {
+    /// Signer-manager trait principal passed to `process-reward-claims`.
+    pub signer_manager: QualifiedContractIdentifier,
+    /// Staker principals to claim for in this call (1..=100).
+    pub stakers: Vec<PrincipalData>,
+    /// The address that deployed the rewards claim registry.
+    pub deployer: StacksAddress,
 }
 
 /// Client for querying the on-chain reward claim registry contract.
@@ -175,8 +193,16 @@ impl TryFrom<ClarityValue> for PendingClaim {
             })
             .transpose()?;
 
+        let signer_manager = clarity_map.remove_principal("signer-manager")?;
+        let PrincipalData::Contract(signer_manager) = signer_manager else {
+            // This should never happen, because registration checks that
+            // the signer manager implements a trait and only smart
+            // contract principals can implement traits.
+            return Err(Error::UnexpectedPrincipal(signer_manager));
+        };
+
         Ok(PendingClaim {
-            signer_manager: clarity_map.remove_principal("signer-manager")?,
+            signer_manager,
             staker: clarity_map.remove_principal("staker")?,
             bond_index,
             reward_cycle: clarity_map.remove_uint("reward-cycle")?,
@@ -220,7 +246,7 @@ mod tests {
             let tuple_entries = vec![
                 (
                     ClarityName::from("signer-manager"),
-                    ClarityValue::Principal(value.signer_manager.clone()),
+                    ClarityValue::Principal(PrincipalData::Contract(value.signer_manager.clone())),
                 ),
                 (
                     ClarityName::from("staker"),
@@ -277,12 +303,13 @@ mod tests {
     #[tokio::test]
     async fn get_pending_claims_works_without_cursor() {
         let staker = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
-        let signer_manager =
-            PrincipalData::parse("ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager")
-                .unwrap();
+        let signer_manager = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
 
         let claim = PendingClaim {
-            signer_manager: signer_manager.clone(),
+            signer_manager,
             staker: staker.clone(),
             bond_index: None,
             reward_cycle: 42,
@@ -337,13 +364,14 @@ mod tests {
     #[tokio::test]
     async fn get_pending_claims_works_with_cursor() {
         let staker = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
-        let signer_manager =
-            PrincipalData::parse("ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager")
-                .unwrap();
+        let signer_manager = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
 
         let cursor = RegistrationKey {
             staker: staker.clone(),
-            signer_manager: signer_manager.clone(),
+            signer_manager: PrincipalData::Contract(signer_manager.clone()),
         };
 
         let claim = PendingClaim {
@@ -439,14 +467,15 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_pending_claims_continues_on_empty_rows_with_next() {
-        let signer_manager =
-            PrincipalData::parse("ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager")
-                .unwrap();
+        let signer_manager = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
 
         // First page: ticks burned on non-pending nodes, resume cursor only.
         let skipped = RegistrationKey {
             staker: PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap(),
-            signer_manager: signer_manager.clone(),
+            signer_manager: PrincipalData::Contract(signer_manager.clone()),
         };
         let pending = PendingClaim {
             signer_manager: signer_manager.clone(),
