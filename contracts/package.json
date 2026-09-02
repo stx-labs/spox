@@ -12,7 +12,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@stacks/clarinet-sdk": "3.16.0",
+    "@stacks/clarinet-sdk": "3.23.1",
     "@stacks/transactions": "7.4.0",
     "@types/node": "24.12.2",
     "chokidar-cli": "3.0.0",

@@ -58,13 +58,47 @@ genesis:
   - signers
   - signers-voting
   - costs-4
+  - pox-5
 plan:
   batches:
   - id: 0
     transactions:
     - transaction-type: emulated-contract-publish
+      contract-name: sbtc-deposit
+      emulated-sender: SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4
+      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-deposit.clar
+      clarity-version: 3
+    - transaction-type: emulated-contract-publish
+      contract-name: sbtc-withdrawal
+      emulated-sender: SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4
+      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-withdrawal.clar
+      clarity-version: 3
+    epoch: '3.0'
+  - id: 1
+    transactions:
+    - transaction-type: emulated-contract-publish
+      contract-name: reward-claim-traits
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/reward-claim-traits.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
+      contract-name: mock-signer-manager
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/mock-signer-manager.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
       contract-name: registry
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       path: contracts/registry.clar
-      clarity-version: 5
-    epoch: '3.4'
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
+      contract-name: reward-claim-registry
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/reward-claim-registry.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
+      contract-name: signer-manager
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/signer-manager.clar
+      clarity-version: 6
+    epoch: '4.0'

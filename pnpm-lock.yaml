@@ -11,8 +11,8 @@ importers:
   contracts:
     dependencies:
       '@stacks/clarinet-sdk':
-        specifier: 3.16.0
-        version: 3.16.0
+        specifier: 3.23.1
+        version: 3.23.1
       '@stacks/transactions':
         specifier: 7.4.0
         version: 7.4.0
@@ -27,7 +27,7 @@ importers:
         version: 4.1.4(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))
       vitest-environment-clarinet:
         specifier: 3.0.2
-        version: 3.0.2(@stacks/clarinet-sdk@3.16.0)(vitest@4.1.4(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)))
+        version: 3.0.2(@stacks/clarinet-sdk@3.23.1)(vitest@4.1.4(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)))
 
   tests:
     dependencies:
@@ -785,12 +785,12 @@ packages:
   '@scure/btc-signer@1.8.1':
     resolution: {integrity: sha512-8nX9T++dFyKpvqksNHfSi9CgRsGnHAQtCdIQ1y1GmbCGLpV97v4MUyemUUT6uDumKL3oo3m4niyY6A32nmdLuQ==}
 
-  '@stacks/clarinet-sdk-wasm@15.16.0':
-    resolution: {integrity: sha512-OBffQar1BSw0EZ9vnXeSLuVw4O0qfiFgcsSWcDvjybWOew41lUmSLa0QDwbfnKW0tmw2WAC6fDzzHZGQnhHWgg==}
+  '@stacks/clarinet-sdk-wasm@3.23.1':
+    resolution: {integrity: sha512-XWTKhSdMEM1QsnjQpsU3+zEiwjaGhY/rUf0hCW9cGdxBy+rImxyUacxr6Flq1XdVwZJSO0oidC5wxx4gDGjt0A==}
 
-  '@stacks/clarinet-sdk@3.16.0':
-    resolution: {integrity: sha512-IhKXuEQnq8vfh97f3R05IHJlUqzT6kOcyWAihOgpb+Ap7t/OA2aCQQfsz4qXonnFXxA1uzojihFAMigMZ/VfNA==}
-    engines: {node: '>=18.0.0'}
+  '@stacks/clarinet-sdk@3.23.1':
+    resolution: {integrity: sha512-OqGtIf4NSfX0eyIpY9ShxRpdD8HCrupMyRqR3iHqHmlN55d1KqA/lOLql1WGpLv0x9yEt4UP3xiM5Dd9l8HN1w==}
+    engines: {node: '>=20'}
 
   '@stacks/common@6.16.0':
     resolution: {integrity: sha512-PnzvhrdGRMVZvxTulitlYafSK4l02gPCBBoI9QEoTqgSnv62oaOXhYAUUkTMFKxdHW1seVEwZsrahuXiZPIAwg==}
@@ -3386,11 +3386,11 @@ snapshots:
       '@scure/base': 1.2.6
       micro-packed: 0.7.3
 
-  '@stacks/clarinet-sdk-wasm@15.16.0': {}
+  '@stacks/clarinet-sdk-wasm@3.23.1': {}
 
-  '@stacks/clarinet-sdk@3.16.0':
+  '@stacks/clarinet-sdk@3.23.1':
     dependencies:
-      '@stacks/clarinet-sdk-wasm': 15.16.0
+      '@stacks/clarinet-sdk-wasm': 3.23.1
       '@stacks/transactions': 7.4.0
       kolorist: 1.8.0
       prompts: 2.4.2
@@ -5475,9 +5475,9 @@ snapshots:
       jiti: 2.6.1
       tsx: 4.21.0
 
-  vitest-environment-clarinet@3.0.2(@stacks/clarinet-sdk@3.16.0)(vitest@4.1.4(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))):
+  vitest-environment-clarinet@3.0.2(@stacks/clarinet-sdk@3.23.1)(vitest@4.1.4(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))):
     dependencies:
-      '@stacks/clarinet-sdk': 3.16.0
+      '@stacks/clarinet-sdk': 3.23.1
       vitest: 4.1.4(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))
 
   vitest@4.1.2(@types/node@24.12.2)(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)):

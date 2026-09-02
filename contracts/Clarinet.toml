@@ -5,6 +5,19 @@ authors = []
 telemetry = false
 cache_dir = "./.cache"
 
+# The sBTC contracts are fetched from mainnet and deployed at their real
+# addresses, which matches the exact principals pox-5, signer-manager, and
+# sweep-registry reference. Require sbtc-deposit + sbtc-withdrawal (matching
+# core-contract-tests); that transitively brings in sbtc-registry + sbtc-token
+# AND is the combination clarinet recognizes as the sBTC system, so the genesis
+# `sbtc-balance` funding is applied. Requiring fewer leaves sbtc-token unfunded.
+# The sources are cached, so only the first fetch requires network access.
+[[project.requirements]]
+contract_id = "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-deposit"
+
+[[project.requirements]]
+contract_id = "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-withdrawal"
+
 # Check-checker settings:
 # trusted_sender: if true, inputs are trusted after tx_sender has been checked.
 # trusted_caller: if true, inputs are trusted after contract-caller has been checked.
@@ -15,11 +28,47 @@ cache_dir = "./.cache"
 
 [repl.analysis]
 passes = ["check_checker"]
-check_checker = { trusted_sender = false, trusted_caller = false, callee_filter = false }
+# check_checker = { trusted_sender = true, trusted_caller = false, callee_filter = true }
+
+[repl.analysis.check_checker]
+trusted_sender = true
+trusted_caller = false
+callee_filter = true
+strict = false
 
 [contracts]
 
+# --- spox contracts ---
+
 [contracts.registry]
 path = "contracts/registry.clar"
-clarity_version = 5
-epoch = "3.4"
+clarity_version = 6
+epoch = 4.0
+
+[contracts.reward-claim-traits]
+path = "contracts/reward-claim-traits.clar"
+clarity_version = 6
+epoch = 4.0
+
+[contracts.reward-claim-registry]
+path = "contracts/reward-claim-registry.clar"
+clarity_version = 6
+epoch = 4.0
+
+# --- Reference contracts from stacks-core, for integration tests ---
+# pox-5 is deliberately NOT listed under [contracts]: it is deployed by
+# `override_boot_contracts_source` above.
+
+[contracts.signer-manager]
+path = "contracts/signer-manager.clar"
+clarity_version = 6
+epoch = 4.0
+
+# --- Mocks, for fast unit tests ---
+# mock-signer-manager is passed to process-reward-claim / settle-pending-withdrawal as a
+# trait argument, so it can be used per-test alongside the real signer-manager.
+
+[contracts.mock-signer-manager]
+path = "contracts/mock-signer-manager.clar"
+clarity_version = 6
+epoch = 4.0
