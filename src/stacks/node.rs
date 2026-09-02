@@ -4,11 +4,16 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use bitcoin::{PublicKey, XOnlyPublicKey};
+use blockstack_lib::burnchains::Txid;
+use blockstack_lib::chainstate::stacks::StacksTransaction;
+use blockstack_lib::codec::StacksMessageCodec as _;
 use clarity::types::chainstate::BlockHeaderHash;
 use clarity::types::chainstate::ConsensusHash;
 use clarity::types::chainstate::StacksAddress;
 use clarity::vm::types::{BuffData, SequenceData};
 use clarity::vm::{ClarityName, ContractName, Value};
+use reqwest::header::CONTENT_LENGTH;
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Deserializer};
 use url::Url;
 
@@ -66,6 +71,48 @@ pub struct AccountInfo {
     pub unlock_height: u64,
     /// The next nonce for the account.
     pub nonce: u64,
+}
+
+/// The details of a rejected transaction
+///
+/// The fields match the JSON fields returned from a Stacks node and are
+/// defined in:
+/// https://github.com/stacks-network/stacks-core/blob/2.5.0.0.5/docs/rpc-endpoints.md
+#[derive(Debug, Deserialize)]
+pub struct TxRejection {
+    /// The error message. It should always be the string "transaction
+    /// rejection".
+    pub error: String,
+    /// The reason code for the rejection.
+    pub reason: String,
+    /// More details about the reason for the rejection.
+    pub reason_data: Option<serde_json::Value>,
+    /// The transaction ID of the rejected transaction.
+    pub txid: Txid,
+}
+
+impl std::fmt::Display for TxRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "transaction rejected from the mempool: {}", self.reason)
+    }
+}
+
+impl std::error::Error for TxRejection {}
+
+/// The response from a POST /v2/transactions request.
+///
+/// The stacks node returns three types of responses, either:
+/// 1. A 200 status hex encoded txid in the response body (on acceptance)
+/// 2. A 400 status with a JSON object body (on rejection),
+/// 3. A 400/500 status string message about some other error (such as
+///    using an unsupported address mode).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum SubmitTxResponse {
+    /// The transaction ID for the submitted transaction.
+    Acceptance(Txid),
+    /// The response when the transaction is rejected from the node.
+    Rejection(TxRejection),
 }
 
 /// Subset of the response from `GET /v2/info`.
@@ -278,6 +325,40 @@ impl StacksClient {
             .error_for_status()
             .map_err(Error::StacksNodeResponse)?
             .json::<NodeInfo>()
+            .await
+            .map_err(Error::UnexpectedStacksResponse)
+    }
+
+    /// Submit a transaction to a Stacks node.
+    ///
+    /// This is done by making a POST /v2/transactions request to a Stacks
+    /// node. That endpoint supports two different content-types in the
+    /// request body: JSON, and an octet-stream. This function always sends
+    /// the raw transaction bytes as an octet-stream.
+    #[tracing::instrument(skip_all)]
+    pub async fn submit_tx(&self, tx: &StacksTransaction) -> Result<SubmitTxResponse, Error> {
+        let path = "/v2/transactions";
+        let url = self
+            .endpoint
+            .join(path)
+            .map_err(|err| Error::PathJoin(err, self.endpoint.clone(), Cow::Borrowed(path)))?;
+
+        tracing::debug!(txid = %tx.txid(), "submitting transaction to the stacks node");
+        let body = tx.serialize_to_vec();
+
+        let response: reqwest::Response = self
+            .client
+            .post(url)
+            .timeout(REQUEST_TIMEOUT)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_LENGTH, body.len())
+            .body(body)
+            .send()
+            .await
+            .map_err(Error::StacksNodeRequest)?;
+
+        response
+            .json()
             .await
             .map_err(Error::UnexpectedStacksResponse)
     }

@@ -25,14 +25,11 @@ use secp256k1::ecdsa::RecoverableSignature;
 
 /// A single-sig Stacks wallet that tracks a local nonce counter.
 ///
-/// The nonce starts at whatever value is passed to [`StacksWallet::new`] (typically `0`)
-/// and is incremented when building transaction auth via [`StacksWallet::as_unsigned_tx_auth`].
-/// Callers must refresh the nonce from the node with [`StacksWallet::set_nonce`] (after
-/// `get_account`) before submitting transactions.
+/// The nonce starts at whatever value is passed to [`StacksWallet::new`]
+/// and must be manually incremented or set.
 ///
-/// `chain_id` is the exact value from the stacks node's `/v2/info` `network_id` field and is
-/// written into signed transactions. Address version bytes only depend on whether that value
-/// equals [`CHAIN_ID_MAINNET`].
+/// The `chain_id` should be the exact value from the stacks node's
+/// `/v2/info` `network_id` field.
 #[derive(Debug)]
 pub struct StacksWallet {
     /// Secp256k1 private key used to sign transactions.
@@ -76,18 +73,24 @@ impl StacksWallet {
         self.chain_id == CHAIN_ID_MAINNET
     }
 
-    /// Set the next nonce to the provided value (typically from `get_account`).
+    /// Set the next nonce to the provided value.
     pub fn set_nonce(&self, value: u64) {
         self.nonce.store(value, Ordering::Relaxed);
     }
 
-    /// Build an unsigned single-sig spending condition and advance the local nonce.
+    /// Increment the wallet nonce by 1.
+    pub fn increment_nonce(&self) {
+        self.nonce.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Build an unsigned single-sig spending condition.
     ///
-    /// The returned spending condition has a fee and nonce set, but an empty signature.
+    /// The returned spending condition has a fee and nonce set, but an
+    /// empty signature.
     pub fn as_unsigned_tx_auth(&self, tx_fee: u64) -> SinglesigSpendingCondition {
         SinglesigSpendingCondition {
             signer: self.address.bytes().clone(),
-            nonce: self.nonce.fetch_add(1, Ordering::Relaxed),
+            nonce: self.nonce.load(Ordering::Relaxed),
             tx_fee,
             hash_mode: SinglesigHashMode::P2PKH,
             key_encoding: TransactionPublicKeyEncoding::Compressed,
@@ -96,8 +99,6 @@ impl StacksWallet {
     }
 
     /// Build and sign a Stacks transaction for the given payload.
-    ///
-    /// This advances the local nonce via [`StacksWallet::as_unsigned_tx_auth`].
     pub fn sign_tx(&self, payload: TransactionPayload, tx_fee: u64) -> StacksTransaction {
         use TransactionSpendingCondition::Singlesig;
 
@@ -211,16 +212,16 @@ mod tests {
     }
 
     #[test]
-    fn as_unsigned_tx_auth_increments_nonce() {
+    fn as_unsigned_tx_auth_uses_current_nonce_without_incrementing() {
         let wallet = StacksWallet::new(test_secret_key(), CHAIN_ID_TESTNET, 7);
 
         let auth0 = wallet.as_unsigned_tx_auth(1000);
         assert_eq!(auth0.nonce, 7);
-        assert_eq!(wallet.nonce(), 8);
+        assert_eq!(wallet.nonce(), 7);
 
         let auth1 = wallet.as_unsigned_tx_auth(1000);
-        assert_eq!(auth1.nonce, 8);
-        assert_eq!(wallet.nonce(), 9);
+        assert_eq!(auth1.nonce, 7);
+        assert_eq!(wallet.nonce(), 7);
     }
 
     #[test]
@@ -231,7 +232,7 @@ mod tests {
         let tx = wallet.sign_tx(payload, 1000);
         assert!(tx.verify().is_ok());
         assert_eq!(tx.chain_id, CHAIN_ID_TESTNET);
-        assert_eq!(wallet.nonce(), 1);
+        assert_eq!(wallet.nonce(), 0);
     }
 
     #[test]
@@ -242,7 +243,18 @@ mod tests {
 
         let auth = wallet.as_unsigned_tx_auth(1);
         assert_eq!(auth.nonce, 42);
-        assert_eq!(wallet.nonce(), 43);
+        assert_eq!(wallet.nonce(), 42);
+    }
+
+    #[test]
+    fn increment_nonce_advances_counter() {
+        let wallet = StacksWallet::new(test_secret_key(), CHAIN_ID_TESTNET, 7);
+        wallet.increment_nonce();
+        assert_eq!(wallet.nonce(), 8);
+
+        let auth = wallet.as_unsigned_tx_auth(1000);
+        assert_eq!(auth.nonce, 8);
+        assert_eq!(wallet.nonce(), 8);
     }
 
     #[test]

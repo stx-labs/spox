@@ -1,5 +1,7 @@
 //! Client for the on-chain reward claim registry.
 
+use std::collections::HashMap;
+
 use clarity::types::chainstate::StacksAddress;
 use clarity::vm::ClarityName;
 use clarity::vm::ContractName;
@@ -63,23 +65,49 @@ pub struct PendingClaimsPage {
 /// Arguments for one `process-reward-claims` contract call.
 ///
 /// All [`Self::stakers`] share [`Self::signer_manager`], and the list
-/// length is at most [`MAX_STAKERS_LENGTH`]. (TODO: enforce this at
-/// construction time)
+/// length is at most [`MAX_STAKERS_LENGTH`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessRewardClaimsBatch {
+pub struct RewardClaimsBatch {
     /// Signer-manager trait principal passed to `process-reward-claims`.
-    pub signer_manager: QualifiedContractIdentifier,
+    signer_manager: QualifiedContractIdentifier,
     /// Staker principals to claim for in this call (1..=100).
-    pub stakers: Vec<PrincipalData>,
+    stakers: Vec<PrincipalData>,
     /// The address that deployed the rewards claim registry.
-    pub deployer: StacksAddress,
+    deployer: StacksAddress,
+}
+
+impl RewardClaimsBatch {
+    /// Create a new dummy reward claims batch.
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        Self {
+            signer_manager: QualifiedContractIdentifier::transient(),
+            stakers: vec![PrincipalData::from(StacksAddress::burn_address(false))],
+            deployer: StacksAddress::burn_address(false),
+        }
+    }
+
+    /// The signer-manager principal passed to `process-reward-claims`.
+    pub fn signer_manager(&self) -> &QualifiedContractIdentifier {
+        &self.signer_manager
+    }
+
+    /// The stakers to claim for in this call.
+    pub fn stakers(&self) -> &[PrincipalData] {
+        &self.stakers
+    }
+
+    /// The address that deployed the rewards claim registry.
+    pub fn deployer(&self) -> &StacksAddress {
+        &self.deployer
+    }
 }
 
 /// Client for querying the on-chain reward claim registry contract.
 #[derive(Debug, Clone)]
 pub struct RewardClaimRegistry {
     /// The deployer of the registry smart contract.
-    contract_principal: StacksAddress,
+    deployer: StacksAddress,
     /// The name of the registry smart contract.
     contract_name: ContractName,
     /// The client used to make the requests.
@@ -89,13 +117,18 @@ pub struct RewardClaimRegistry {
 impl RewardClaimRegistry {
     /// Create a new reward claim registry client.
     pub fn new(contract: QualifiedContractIdentifier, client: StacksClient) -> Self {
-        let contract_principal = contract.issuer.into();
+        let deployer = contract.issuer.into();
 
         Self {
             contract_name: contract.name,
-            contract_principal,
+            deployer,
             client,
         }
+    }
+
+    /// Get a reference to the client.
+    pub fn client(&self) -> &StacksClient {
+        &self.client
     }
 
     /// Fetch a page of pending claims from the registry.
@@ -104,7 +137,7 @@ impl RewardClaimRegistry {
     /// linked list. To paginate, pass [`PendingClaimsPage::next`] from the
     /// previous page. `next == None` means the walk reached the tail; an
     /// empty `claims` list alone does not.
-    pub async fn get_pending_claims(
+    async fn get_pending_claims(
         &self,
         cursor: Option<&RegistrationKey>,
     ) -> Result<PendingClaimsPage, Error> {
@@ -131,10 +164,10 @@ impl RewardClaimRegistry {
         let result = self
             .client
             .call_read(
-                &self.contract_principal,
+                &self.deployer,
                 &self.contract_name,
                 &ClarityName::from("get-pending-claims"),
-                &self.contract_principal,
+                &self.deployer,
                 &[cursor_arg],
             )
             .await?;
@@ -148,9 +181,8 @@ impl RewardClaimRegistry {
 
     /// Fetch every pending claim by paging through `get-pending-claims`.
     ///
-    /// Continues while the page's `next` cursor is `Some`, including pages
-    /// that return no rows (ticks spent on non-pending registrations).
-    pub async fn get_all_pending_claims(&self) -> Result<Vec<PendingClaim>, Error> {
+    /// Continues while the page's `next` cursor is `Some`.
+    async fn get_all_pending_claims(&self) -> Result<Vec<PendingClaim>, Error> {
         let mut all = Vec::new();
         let mut cursor: Option<RegistrationKey> = None;
 
@@ -165,6 +197,40 @@ impl RewardClaimRegistry {
 
         Ok(all)
     }
+
+    /// Get all pending claims, batched by signer manager, with chunks of
+    /// at most [`MAX_STAKERS_LENGTH`] stakers per batch.
+    pub async fn get_pending_claim_batches(&self) -> Result<Vec<RewardClaimsBatch>, Error> {
+        let claims = self.get_all_pending_claims().await?;
+        Ok(batch_claims(claims, &self.deployer))
+    }
+}
+
+/// Group pending claims by signer-manager and split into contract-call batches.
+///
+/// Each batch has at most [`MAX_STAKERS_LENGTH`] stakers.
+fn batch_claims(claims: Vec<PendingClaim>, deployer: &StacksAddress) -> Vec<RewardClaimsBatch> {
+    let mut groups: HashMap<QualifiedContractIdentifier, Vec<PrincipalData>> = HashMap::new();
+
+    for claim in claims {
+        groups
+            .entry(claim.signer_manager)
+            .or_default()
+            .push(claim.staker);
+    }
+
+    let mut batches = Vec::new();
+    for (signer_manager, stakers) in groups {
+        for chunk in stakers.chunks(MAX_STAKERS_LENGTH) {
+            batches.push(RewardClaimsBatch {
+                signer_manager: signer_manager.clone(),
+                stakers: chunk.to_vec(),
+                deployer: deployer.clone(),
+            });
+        }
+    }
+
+    batches
 }
 
 impl TryFrom<ClarityValue> for RegistrationKey {
@@ -298,6 +364,19 @@ mod tests {
             .unwrap(),
         );
         ClarityValue::okay(page).unwrap()
+    }
+
+    fn claim(
+        signer_manager: &QualifiedContractIdentifier,
+        staker: PrincipalData,
+        reward_cycle: u128,
+    ) -> PendingClaim {
+        PendingClaim {
+            signer_manager: signer_manager.clone(),
+            staker,
+            bond_index: None,
+            reward_cycle,
+        }
     }
 
     #[tokio::test]
@@ -538,5 +617,81 @@ mod tests {
         assert_eq!(result, vec![pending]);
         empty_with_next.assert();
         pending_then_done.assert();
+    }
+
+    #[test]
+    fn batch_pending_claims_empty() {
+        assert!(batch_claims(vec![], &StacksAddress::burn_address(false)).is_empty());
+    }
+
+    #[test]
+    fn batch_pending_claims_groups_by_signer_manager() {
+        let sm_a = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+        let sm_b = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.other-manager",
+        )
+        .unwrap();
+        let staker1 = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
+        let staker2 = PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap();
+        let staker3 =
+            PrincipalData::parse("ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.staker-3").unwrap();
+
+        let claims = vec![
+            claim(&sm_a, staker1.clone(), 1),
+            claim(&sm_b, staker2.clone(), 2),
+            claim(&sm_a, staker3.clone(), 3),
+        ];
+
+        let batches = batch_claims(claims, &StacksAddress::burn_address(false));
+        assert_eq!(batches.len(), 2);
+
+        let batch_a = batches
+            .iter()
+            .find(|batch| batch.signer_manager() == &sm_a)
+            .expect("batch for signer-manager A");
+        let batch_b = batches
+            .iter()
+            .find(|batch| batch.signer_manager() == &sm_b)
+            .expect("batch for signer-manager B");
+
+        assert_eq!(batch_a.stakers(), &[staker1, staker3]);
+        assert_eq!(batch_b.stakers(), &[staker2]);
+        assert_eq!(batch_a.deployer(), &StacksAddress::burn_address(false));
+        assert_eq!(batch_b.deployer(), &StacksAddress::burn_address(false));
+    }
+
+    #[test]
+    fn batch_pending_claims_chunks_at_max_stakers() {
+        let sm = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+        let claims: Vec<_> = (0..=MAX_STAKERS_LENGTH)
+            .map(|i| {
+                claim(
+                    &sm,
+                    PrincipalData::parse(&format!(
+                        "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.s{i}"
+                    ))
+                    .unwrap(),
+                    i as u128,
+                )
+            })
+            .collect();
+
+        let batches = batch_claims(claims.clone(), &StacksAddress::burn_address(false));
+        assert_eq!(batches.len(), 2);
+        assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
+        assert_eq!(batches[0].stakers().len(), MAX_STAKERS_LENGTH);
+        assert_eq!(batches[1].stakers().len(), 1);
+        assert_eq!(batches[0].stakers()[0], claims[0].staker);
+        assert_eq!(
+            batches[0].stakers()[MAX_STAKERS_LENGTH - 1],
+            claims[MAX_STAKERS_LENGTH - 1].staker
+        );
+        assert_eq!(batches[1].stakers()[0], claims[MAX_STAKERS_LENGTH].staker);
     }
 }

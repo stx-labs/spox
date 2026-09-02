@@ -21,7 +21,7 @@ use clarity::vm::types::TraitIdentifier;
 use clarity::vm::types::TypeSignature;
 
 use crate::stacks::reward_claim_registry::MAX_STAKERS_LENGTH;
-use crate::stacks::reward_claim_registry::ProcessRewardClaimsBatch;
+use crate::stacks::reward_claim_registry::RewardClaimsBatch;
 
 /// The type signature for the list of 100 stakers.
 ///
@@ -113,22 +113,22 @@ pub trait AsContractCall {
     }
 }
 
-impl AsContractCall for ProcessRewardClaimsBatch {
+impl AsContractCall for RewardClaimsBatch {
     /// The name of the clarity smart contract that relates to this struct.
     const CONTRACT_NAME: &'static str = "reward-claim-registry";
     /// The specific function name that relates to this struct.
     const FUNCTION_NAME: &'static str = "process-reward-claims";
     /// The stacks address that deployed the contract.
     fn deployer_address(&self) -> &StacksAddress {
-        &self.deployer
+        self.deployer()
     }
     /// The arguments to the clarity function.
     fn as_contract_args(&self) -> Vec<ClarityValue> {
         let callable = CallableData {
-            contract_identifier: self.signer_manager.clone(),
-            trait_identifier: Some(make_trait_identifier(self.deployer.clone())),
+            contract_identifier: self.signer_manager().clone(),
+            trait_identifier: Some(make_trait_identifier(self.deployer().clone())),
         };
-        let stakers = self.stakers.iter().cloned().map(ClarityValue::Principal);
+        let stakers = self.stakers().iter().cloned().map(ClarityValue::Principal);
         let stakers = ListData {
             data: stakers.collect(),
             type_signature: LIST_PRINCIPALS_SIGNATURE.clone(),
@@ -143,19 +143,13 @@ impl AsContractCall for ProcessRewardClaimsBatch {
 
 #[cfg(test)]
 mod tests {
-    use clarity::vm::types::PrincipalData;
-
     use super::*;
 
     #[test]
     fn process_reward_claims_contract_call_creation() {
         // This is to check that this function doesn't implicitly panic. If
         // it doesn't panic now, it can never panic at runtime.
-        let call = ProcessRewardClaimsBatch {
-            signer_manager: QualifiedContractIdentifier::transient(),
-            stakers: vec![PrincipalData::from(StacksAddress::burn_address(false))],
-            deployer: StacksAddress::burn_address(false),
-        };
+        let call = RewardClaimsBatch::dummy();
 
         let _ = call.as_contract_call();
     }
