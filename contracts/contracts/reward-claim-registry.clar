@@ -619,8 +619,8 @@
 ;; registrations.
 ;;
 ;; Parameters:
-;;   cursor  none to start at the head, or the `next` key from the previous
-;;           page so the walk resumes at that key.
+;;   cursor  none to start at the head, or the `some` to start at the 
+;;           supplied key.
 ;;
 ;; Returns:
 ;;   ok wrapping { rows, next }. Each row has signer-manager, staker,
@@ -1666,7 +1666,7 @@
 ;; Parameters:
 ;;
 ;;   cursor  use none to start at the head. When some, start the walk at
-;;           that key (include it if settleable).
+;;           that key.
 ;;
 ;; Returns:
 ;;
