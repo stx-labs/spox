@@ -10,6 +10,7 @@ use blockstack_lib::codec::StacksMessageCodec as _;
 use clarity::types::chainstate::BlockHeaderHash;
 use clarity::types::chainstate::ConsensusHash;
 use clarity::types::chainstate::StacksAddress;
+use clarity::types::chainstate::StacksBlockId;
 use clarity::vm::types::{BuffData, SequenceData};
 use clarity::vm::{ClarityName, ContractName, Value};
 use reqwest::header::CONTENT_LENGTH;
@@ -61,6 +62,9 @@ struct AccountEntryResponse {
 }
 
 /// Account info for a Stacks address.
+///
+/// The actual return type can be found here:
+/// https://github.com/stacks-network/stacks-core/blob/4.0.1/stackslib/src/net/api/getaccount.rs#L34-L46
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountInfo {
     /// The total balance of the account in micro-STX, including locked funds.
@@ -77,7 +81,7 @@ pub struct AccountInfo {
 ///
 /// The fields match the JSON fields returned from a Stacks node and are
 /// defined in:
-/// https://github.com/stacks-network/stacks-core/blob/2.5.0.0.5/docs/rpc-endpoints.md
+/// https://github.com/stacks-network/stacks-core/blob/4.0.1/docs/rpc-endpoints.md
 #[derive(Debug, Deserialize)]
 pub struct TxRejection {
     /// The error message. It should always be the string "transaction
@@ -118,7 +122,9 @@ pub enum SubmitTxResponse {
 /// Subset of the response from `GET /v2/info`.
 ///
 /// Despite the field name, `network_id` is the Stacks chain id used in
-/// transactions.
+/// transactions. This is a slimmed down version of the response containing
+/// only the fields we need, the full response can be seen in:
+/// https://github.com/stacks-network/stacks-core/blob/4.0.1/stackslib/src/net/api/getinfo.rs#L53-L85
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct NodeInfo {
     /// Stacks chain id reported by the node.
@@ -128,6 +134,13 @@ pub struct NodeInfo {
     pub stacks_tip: BlockHeaderHash,
     /// Consensus hash of the tip of the canonical Stacks chain.
     pub stacks_tip_consensus_hash: ConsensusHash,
+}
+
+impl NodeInfo {
+    /// Create a new [`StacksBlockId`] from the node info.
+    pub fn chain_tip(&self) -> StacksBlockId {
+        StacksBlockId::new(&self.stacks_tip_consensus_hash, &self.stacks_tip)
+    }
 }
 
 /// Helper function for converting a hexadecimal string into an integer.
@@ -221,9 +234,13 @@ impl StacksClient {
         fn_name: &ClarityName,
         sender: &StacksAddress,
         arguments: &[Value],
+        chain_tip: Option<&StacksBlockId>,
     ) -> Result<Value, Error> {
+        let tip = chain_tip
+            .map(|tip| tip.to_string())
+            .unwrap_or_else(|| "latest".to_string());
         let path = format!(
-            "/v2/contracts/call-read/{contract_principal}/{contract_name}/{fn_name}?tip=latest"
+            "/v2/contracts/call-read/{contract_principal}/{contract_name}/{fn_name}?tip={tip}"
         );
 
         let url = self

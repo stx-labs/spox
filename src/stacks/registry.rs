@@ -67,6 +67,7 @@ impl DepositAddressRegistry {
                 &ClarityName::from("get-next-address-id"),
                 &self.contract_principal,
                 &[],
+                None,
             )
             .await?;
 
@@ -112,6 +113,7 @@ impl DepositAddressRegistry {
                 &ClarityName::from("get-addresses"),
                 &self.contract_principal,
                 &arguments,
+                None,
             )
             .await?;
 
