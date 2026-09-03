@@ -33,9 +33,9 @@
 ;; call was in flight (same pattern as pox-5's ERR_REENTRANT_CALL).
 (define-constant ERR_REENTRANT_CALL (err u612))
 
-;; A (list 100 uint) whose only job is to bound the get-pending-claims /
-;; get-pending-withdrawals folds to at most 100 node visits per call. The
-;; element values are never read (the fold step ignores `tick`).
+;; A (list 100 uint) whose only job is to bound the get-pending-claims,
+;; get-registrations, get-pending-withdrawals, and get-withdrawals folds to
+;; at most 100 iterations per call.
 ;; @format-ignore
 (define-constant PENDING_TICKS (list
     u0 u0 u0 u0 u0 u0 u0 u0 u0 u0
@@ -244,10 +244,11 @@
 )
 
 ;; --- Doubly-linked-list maintenance over registration-ll ---
-;; The list lets get-pending-claims walk every live registration without a global
-;; index. `registration-ll-head`/`-tail` bound the walk; each node stores its
+;; The list lets get-pending-claims and get-registrations walk every live
+;; registration without a global index. `registration-ll-head`/`-tail` bound
+;; the walk; each node stores its
 ;; prev/next key. Append is O(1) at the tail; remove splices in O(1). Both are
-;; infallible and return bool.
+;; infallible and return a boolean.
 
 ;; Append `key` at the tail (it must not already be in the list). The nested
 ;; match on the neighbor read avoids a runtime panic: the entry is always
@@ -308,7 +309,7 @@
 
 ;; --- Doubly-linked-list maintenance over pending-withdrawal-ll ---
 ;; Same shape as the registration list, one node per indexed withdrawal so
-;; get-pending-withdrawals can walk them directly.
+;; get-pending-withdrawals and get-withdrawals can walk them.
 
 ;; Append `key` at the tail of the pending-withdrawal list.
 ;;
@@ -535,6 +536,109 @@
             ;; If `node` is still `some` after the fold, ticks ran out with more
             ;; list ahead: resume after `last-visited`. If `node` is none, the
             ;; walk reached the tail or the list was empty.
+            (next (match (get node walk)
+                more-to-do (get last-visited walk)
+                none
+            ))
+        )
+        (ok {
+            rows: (get rows walk),
+            next: next,
+        })
+    )
+)
+
+;; Fold step for get-registrations. From the current `node` it reads that
+;; registration, appends the full registration merged with its key, records
+;; `last-visited`, and advances `node` to the next linked-list entry. Once
+;; `node` is none it is a no-op for the remaining ticks.
+;;
+;; #[allow(unchecked_data)]
+(define-private (registrations-step
+        (tick_ uint)
+        (acc {
+            node: (optional {
+                staker: principal,
+                signer-manager: principal,
+            }),
+            last-visited: (optional {
+                staker: principal,
+                signer-manager: principal,
+            }),
+            rows: (list 100
+                {
+                    staker: principal,
+                    signer-manager: principal,
+                    bond-index: (optional uint),
+                    remaining-cycles: uint,
+                    one-claim-per-reward-cycle: bool,
+                    next-claim-distribution: uint,
+                    prepaid-ustx: uint,
+                }
+            ),
+        })
+    )
+    (match (get node acc)
+        key
+        (let ((next-node (match (map-get? registration-ll key)
+                links (get next links)
+                none
+            )))
+            (match (map-get? registrations key)
+                registration
+                (merge acc {
+                    node: next-node,
+                    last-visited: (some key),
+                    rows: (default-to (get rows acc)
+                        (as-max-len? (append (get rows acc) (merge key registration)) u100)
+                    ),
+                })
+                ;; A live linked-list node with no registration should never
+                ;; happen; skip it defensively rather than aborting.
+                (merge acc {
+                    node: next-node,
+                    last-visited: (some key),
+                })
+            )
+        )
+        ;; Past the tail: nothing left to visit.
+        acc
+    )
+)
+
+;; List every registration.
+
+;; Walks the registration linked list from cursor, or from the head when
+;; cursor is none, and returns up to 100 rows. Unlike get-pending-claims,
+;; every visited registration is emitted. Use the returned `next` cursor:
+;; none means the walk hit the tail; some key means pass that key as the
+;; next `cursor` to resume after it.
+;;
+;; Parameters:
+;;   cursor  none to start at the head, or the `next` key from the previous
+;;           page so the walk resumes at that key's successor.
+;;
+;; Returns:
+;;   ok wrapping { rows, next }. Each row is the registration map value with
+;;   staker and signer-manager merged in. `next` is none at the tail, or the
+;;   last visited registration key when more nodes may remain.
+(define-read-only (get-registrations (cursor (optional {
+    staker: principal,
+    signer-manager: principal,
+})))
+    (let (
+            (start (match cursor
+                cursor-key (match (map-get? registration-ll cursor-key)
+                    links (get next links)
+                    none
+                )
+                (var-get registration-ll-head)
+            ))
+            (walk (fold registrations-step PENDING_TICKS {
+                node: start,
+                last-visited: none,
+                rows: (list),
+            }))
             (next (match (get node walk)
                 more-to-do (get last-visited walk)
                 none
@@ -1342,6 +1446,113 @@
                 (var-get pending-withdrawal-ll-head)
             ))
             (walk (fold pending-withdrawals-step PENDING_TICKS {
+                node: start,
+                last-visited: none,
+                rows: (list),
+            }))
+            (next (match (get node walk)
+                more-to-do (get last-visited walk)
+                none
+            ))
+        )
+        (ok {
+            rows: (get rows walk),
+            next: next,
+        })
+    )
+)
+
+;; Fold step for get-withdrawals. Visits one linked-list node, appends the
+;; withdrawal key merged with its indexed burn height, records
+;; `last-visited`, and advances `node`. Unlike pending-withdrawals-step,
+;; every stored entry is emitted.
+;;
+;; #[allow(unchecked_data)]
+(define-private (withdrawals-step
+        (tick_ uint)
+        (acc {
+            node: (optional {
+                staker: principal,
+                signer-manager: principal,
+                request-id: uint,
+            }),
+            last-visited: (optional {
+                staker: principal,
+                signer-manager: principal,
+                request-id: uint,
+            }),
+            rows: (list 100
+                {
+                    staker: principal,
+                    signer-manager: principal,
+                    request-id: uint,
+                    indexed-height: uint,
+                }
+            ),
+        })
+    )
+    (match (get node acc)
+        key
+        (let ((next-node (match (map-get? pending-withdrawal-ll key)
+                links (get next links)
+                none
+            )))
+            (match (map-get? pending-withdrawals key)
+                stored-height
+                (merge acc {
+                    node: next-node,
+                    last-visited: (some key),
+                    rows: (default-to (get rows acc)
+                        (as-max-len?
+                            (append (get rows acc) (merge key { indexed-height: stored-height }))
+                            u100
+                        )),
+                })
+                ;; A linked-list node with no pending entry should never happen;
+                ;; skip it defensively rather than aborting the read.
+                (merge acc {
+                    node: next-node,
+                    last-visited: (some key),
+                })
+            )
+        )
+        ;; Past the tail: nothing left to visit.
+        acc
+    )
+)
+
+;; List every indexed L1 withdrawal. Walks pending-withdrawal-ll from
+;; cursor, or from the head when cursor is none, and returns up to 100
+;; rows. Unlike get-pending-withdrawals, every visited entry is emitted.
+;; Use the returned `next` cursor: none means the walk hit the tail; some
+;; key means pass that key as the next `cursor` to resume after it.
+;;
+;; Parameters:
+;;
+;;   cursor  use none to start at the head. When some, it indicates where
+;;           to resume. The withdrawal for this key is not included in the
+;;           response.
+;;
+;; Returns:
+;;
+;;   ok wrapping { rows, next }. Each row has staker, signer-manager,
+;;   request-id, and indexed-height (the Bitcoin block height when the
+;;   withdrawal was indexed). `next` is none at the tail, or the last
+;;   visited key when more nodes may remain.
+(define-read-only (get-withdrawals (cursor (optional {
+    staker: principal,
+    signer-manager: principal,
+    request-id: uint,
+})))
+    (let (
+            (start (match cursor
+                cursor-key (match (map-get? pending-withdrawal-ll cursor-key)
+                    links (get next links)
+                    none
+                )
+                (var-get pending-withdrawal-ll-head)
+            ))
+            (walk (fold withdrawals-step PENDING_TICKS {
                 node: start,
                 last-visited: none,
                 rows: (list),

@@ -32,8 +32,11 @@ import {
   deployer,
   fundAndCalculateRewards,
   fundAndClaimSignerRewards,
+  burnHeight,
   getPendingWithdrawals,
   getPendingClaims,
+  getRegistrations,
+  getWithdrawals,
   getEarned,
   getMaliciousLastReenterError,
   getRegistration,
@@ -149,6 +152,61 @@ function withdrawalRow(staker: string, requestId: bigint, signerManager = SIGNER
 
 function pendingWithdrawalsPage(
   rows: ReturnType<typeof withdrawalRow>[],
+  next: ClarityValue = Cl.none(),
+) {
+  return Cl.tuple({
+    rows: Cl.list(rows),
+    next,
+  });
+}
+
+/** Full registration row from `get-registrations`: map value merged with key. */
+function registrationRow(
+  staker: string,
+  remaining: bigint,
+  nextClaimDistribution: bigint,
+  prepaid: bigint = remaining * FEE_PER_CLAIM,
+  oneClaimPerRewardCycle = true,
+  bondIndex: OptionalCV<UIntCV> = Cl.none(),
+) {
+  return Cl.tuple({
+    staker: Cl.principal(staker),
+    "signer-manager": Cl.principal(SIGNER_MANAGER),
+    "bond-index": bondIndex,
+    "remaining-cycles": Cl.uint(remaining),
+    "one-claim-per-reward-cycle": Cl.bool(oneClaimPerRewardCycle),
+    "next-claim-distribution": Cl.uint(nextClaimDistribution),
+    "prepaid-ustx": Cl.uint(prepaid),
+  });
+}
+
+function registrationsPage(
+  rows: ReturnType<typeof registrationRow>[],
+  next: ClarityValue = Cl.none(),
+) {
+  return Cl.tuple({
+    rows: Cl.list(rows),
+    next,
+  });
+}
+
+/** Full withdrawal row from `get-withdrawals`: key merged with indexed-height. */
+function withdrawalEntryRow(
+  staker: string,
+  requestId: bigint,
+  indexedHeight: bigint,
+  signerManager = SIGNER_MANAGER,
+) {
+  return Cl.tuple({
+    staker: Cl.principal(staker),
+    "signer-manager": Cl.principal(signerManager),
+    "request-id": Cl.uint(requestId),
+    "indexed-height": Cl.uint(indexedHeight),
+  });
+}
+
+function withdrawalsPage(
+  rows: ReturnType<typeof withdrawalEntryRow>[],
   next: ClarityValue = Cl.none(),
 ) {
   return Cl.tuple({
@@ -765,6 +823,140 @@ describe("get-pending-claims", () => {
   );
 });
 
+describe("get-registrations", () => {
+  beforeEach(() => {
+    initPox5();
+    registerSignerManager(SIGNER_PRIVATE_KEY);
+    stakeFor(wallet1, SIGNER_SET_MIN_USTX, 2n);
+  });
+
+  it("is empty when nothing is registered", () => {
+    expect(getRegistrations()).toBeOk(registrationsPage([]));
+  });
+
+  it("lists a registration before its claim is pending", () => {
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
+    expect(getRegistrations()).toBeOk(
+      registrationsPage([registrationRow(wallet1, 1n, STX_FIRST_CLAIM_DIST)]),
+    );
+  });
+
+  it("walks multiple registrations in insertion order", () => {
+    stakeFor(wallet2, SIGNER_SET_MIN_USTX, 2n);
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet2, 2n * FEE_PER_CLAIM, wallet2, SIGNER_MANAGER, STX_START, true);
+    expect(getRegistrations()).toBeOk(
+      registrationsPage([
+        registrationRow(wallet1, 1n, STX_FIRST_CLAIM_DIST),
+        registrationRow(wallet2, 2n, STX_FIRST_CLAIM_DIST),
+      ]),
+    );
+  });
+
+  it("keeps a registration after it is claimed (unlike get-pending-claims)", () => {
+    registerForClaims(wallet1, 3n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
+    expect(getRegistrations()).toBeOk(
+      registrationsPage([registrationRow(wallet1, 2n, STX_FIRST_CLAIM_DIST + 2n)]),
+    );
+  });
+
+  it("drops a registration after cancel", () => {
+    stakeFor(wallet2, SIGNER_SET_MIN_USTX, 2n);
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet2, FEE_PER_CLAIM, wallet2, SIGNER_MANAGER, STX_START, true);
+
+    expect(
+      simnet.callPublicFn(
+        "reward-claim-registry",
+        "cancel-registration",
+        [Cl.principal(wallet1), Cl.principal(SIGNER_MANAGER)],
+        wallet1,
+      ).result,
+    ).toBeOk(Cl.uint(FEE_PER_CLAIM));
+
+    expect(getRegistrations()).toBeOk(
+      registrationsPage([registrationRow(wallet2, 1n, STX_FIRST_CLAIM_DIST)]),
+    );
+  });
+
+  it(
+    "paginates every registration across >100 nodes",
+    () => {
+      const TOTAL = 220;
+
+      const stakers = Array.from({ length: TOTAL }, (_, i) => {
+        const hex = (BigInt(i) + 1n).toString(16).padStart(64, "0") + "01";
+        return privateKeyToAddress(hex, "testnet");
+      });
+
+      for (const staker of stakers) {
+        expect(
+          simnet.transferSTX(SIGNER_SET_MIN_USTX + 1_000_000n, staker, deployer).result,
+        ).toBeOk(Cl.bool(true));
+        stakeFor(staker, SIGNER_SET_MIN_USTX, 2n);
+        expect(
+          registerForClaims(staker, FEE_PER_CLAIM, deployer, SIGNER_MANAGER, STX_START, true)
+            .result,
+        ).toBeOk(Cl.uint(1));
+      }
+
+      const all: string[] = [];
+      let cursor: OptionalCV = Cl.none();
+      const pageSizes: number[] = [];
+      for (let guard = 0; guard < 10; guard++) {
+        const json = cvToJSON(getRegistrations(cursor));
+        expect(json.success).toBe(true);
+        const page = json.value.value as {
+          rows: {
+            value: Array<{
+              value: {
+                staker: { value: string };
+                "remaining-cycles": { value: string };
+                "next-claim-distribution": { value: string };
+              };
+            }>;
+          };
+          next: {
+            value: null | {
+              value: { staker: { value: string }; "signer-manager": { value: string } };
+            };
+          };
+        };
+
+        const rowStakers = page.rows.value.map((row) => row.value.staker.value);
+        pageSizes.push(rowStakers.length);
+        for (const row of page.rows.value) {
+          expect(row.value["remaining-cycles"].value).toBe("1");
+          expect(row.value["next-claim-distribution"].value).toBe(
+            STX_FIRST_CLAIM_DIST.toString(),
+          );
+        }
+        all.push(...rowStakers);
+
+        if (page.next.value === null) {
+          break;
+        }
+        const nextKey = page.next.value.value;
+        cursor = Cl.some(
+          Cl.tuple({
+            staker: Cl.principal(nextKey.staker.value),
+            "signer-manager": Cl.principal(nextKey["signer-manager"].value),
+          }),
+        );
+      }
+
+      expect(pageSizes).toEqual([100, 100, 20]);
+      expect(all).toEqual(stakers);
+    },
+    180_000,
+  );
+});
+
 describe("process-reward-claim (direct sBTC payout)", () => {
   beforeEach(() => {
     initPox5();
@@ -1336,6 +1528,165 @@ describe("get-pending-withdrawals pagination", () => {
         ),
       );
       expect(second).toBeOk(pendingWithdrawalsPage([withdrawalRow(lastStaker, lastId)]));
+    },
+    300_000,
+  );
+});
+
+describe("get-withdrawals", () => {
+  beforeEach(() => {
+    initPox5();
+    registerSignerManager(SIGNER_PRIVATE_KEY);
+    stakeWithPoxAddr(wallet1, SIGNER_SET_MIN_USTX, 2n, 100n);
+    stakeWithPoxAddr(wallet2, SIGNER_SET_MIN_USTX, 2n, 100n);
+    fundAndClaimSignerRewards(2000n, 1n);
+    registerForClaims(wallet1, 3n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet2, 3n * FEE_PER_CLAIM, wallet2, SIGNER_MANAGER, STX_START, true);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+  });
+
+  it("is empty when nothing is indexed", () => {
+    expect(getWithdrawals()).toBeOk(withdrawalsPage([]));
+  });
+
+  it("lists an indexed withdrawal immediately, before it is settleable", () => {
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.some(Cl.uint(1)));
+    const indexedHeight = burnHeight();
+
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
+    expect(getWithdrawals()).toBeOk(
+      withdrawalsPage([withdrawalEntryRow(wallet1, 1n, indexedHeight)]),
+    );
+  });
+
+  it("lists still-pending withdrawals even after the age gate", () => {
+    processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
+    const indexedHeight = burnHeight();
+    mineUntilWithdrawalListable();
+
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
+    expect(getWithdrawals()).toBeOk(
+      withdrawalsPage([withdrawalEntryRow(wallet1, 1n, indexedHeight)]),
+    );
+  });
+
+  it("walks multiple withdrawals in insertion order", () => {
+    processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
+    const height1 = burnHeight();
+    processRewardClaim(wallet2, wallet2, SIGNER_MANAGER);
+    const height2 = burnHeight();
+
+    expect(getWithdrawals()).toBeOk(
+      withdrawalsPage([
+        withdrawalEntryRow(wallet1, 1n, height1),
+        withdrawalEntryRow(wallet2, 2n, height2),
+      ]),
+    );
+  });
+
+  it("drops a withdrawal after it is settled", () => {
+    processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
+    processRewardClaim(wallet2, wallet2, SIGNER_MANAGER);
+    const height2 = burnHeight();
+    rejectWithdrawal(1n);
+    expect(settlePendingWithdrawal(wallet1, 1n, deployer).result).toBeOk(Cl.bool(true));
+
+    expect(getWithdrawals()).toBeOk(
+      withdrawalsPage([withdrawalEntryRow(wallet2, 2n, height2)]),
+    );
+  });
+});
+
+describe("get-withdrawals pagination", () => {
+  it(
+    "paginates every indexed withdrawal across >100 nodes",
+    () => {
+      const TOTAL = 220;
+      initPox5();
+      registerSignerManager(SIGNER_PRIVATE_KEY);
+
+      const stakers = Array.from({ length: TOTAL }, (_, i) => {
+        const hex = (BigInt(i) + 1n).toString(16).padStart(64, "0") + "01";
+        return privateKeyToAddress(hex, "testnet");
+      });
+
+      for (const staker of stakers) {
+        expect(
+          simnet.transferSTX(SIGNER_SET_MIN_USTX + 1_000_000n, staker, deployer).result,
+        ).toBeOk(Cl.bool(true));
+        stakeWithPoxAddr(staker, SIGNER_SET_MIN_USTX, 2n, 100n);
+        expect(
+          registerForClaims(staker, FEE_PER_CLAIM, deployer, SIGNER_MANAGER, STX_START, true)
+            .result,
+        ).toBeOk(Cl.uint(1));
+      }
+
+      fundAndClaimSignerRewards(500_000n, 1n);
+      mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+
+      const expected: { staker: string; requestId: bigint; indexedHeight: bigint }[] = [];
+      for (let i = 0; i < TOTAL; i++) {
+        const staker = stakers[i]!;
+        const { result } = processRewardClaim(staker, deployer, SIGNER_MANAGER);
+        expect(result).toBeOk(Cl.some(Cl.uint(BigInt(i + 1))));
+        expected.push({
+          staker,
+          requestId: BigInt(i + 1),
+          indexedHeight: burnHeight(),
+        });
+      }
+
+      const listed: { staker: string; requestId: bigint; indexedHeight: bigint }[] = [];
+      let cursor: OptionalCV = Cl.none();
+      const pageSizes: number[] = [];
+      for (let guard = 0; guard < 10; guard++) {
+        const json = cvToJSON(getWithdrawals(cursor));
+        expect(json.success).toBe(true);
+        const page = json.value.value as {
+          rows: {
+            value: Array<{
+              value: {
+                staker: { value: string };
+                "request-id": { value: string };
+                "indexed-height": { value: string };
+              };
+            }>;
+          };
+          next: {
+            value: null | {
+              value: {
+                staker: { value: string };
+                "signer-manager": { value: string };
+                "request-id": { value: string };
+              };
+            };
+          };
+        };
+
+        pageSizes.push(page.rows.value.length);
+        for (const row of page.rows.value) {
+          listed.push({
+            staker: row.value.staker.value,
+            requestId: BigInt(row.value["request-id"].value),
+            indexedHeight: BigInt(row.value["indexed-height"].value),
+          });
+        }
+
+        if (page.next.value === null) {
+          break;
+        }
+        const nextKey = page.next.value.value;
+        cursor = Cl.some(
+          Cl.tuple({
+            staker: Cl.principal(nextKey.staker.value),
+            "signer-manager": Cl.principal(nextKey["signer-manager"].value),
+            "request-id": Cl.uint(BigInt(nextKey["request-id"].value)),
+          }),
+        );
+      }
+
+      expect(pageSizes).toEqual([100, 100, 20]);
+      expect(listed).toEqual(expected);
     },
     300_000,
   );

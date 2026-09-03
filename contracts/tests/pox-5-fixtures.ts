@@ -665,10 +665,28 @@ export function getPendingClaims(cursor: OptionalCV = Cl.none()) {
   ).result;
 }
 
+export function getRegistrations(cursor: OptionalCV = Cl.none()) {
+  return simnet.callReadOnlyFn(
+    "reward-claim-registry",
+    "get-registrations",
+    [cursor],
+    deployer,
+  ).result;
+}
+
 export function getPendingWithdrawals(cursor: OptionalCV = Cl.none()) {
   return simnet.callReadOnlyFn(
     "reward-claim-registry",
     "get-pending-withdrawals",
+    [cursor],
+    deployer,
+  ).result;
+}
+
+export function getWithdrawals(cursor: OptionalCV = Cl.none()) {
+  return simnet.callReadOnlyFn(
+    "reward-claim-registry",
+    "get-withdrawals",
     [cursor],
     deployer,
   ).result;
