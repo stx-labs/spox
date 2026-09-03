@@ -321,6 +321,11 @@ impl WithdrawalsBatch {
     pub fn signer_manager(&self) -> &QualifiedContractIdentifier {
         &self.signer_manager
     }
+
+    /// The number of withdrawals to settle in this call.
+    pub fn num_withdrawals(&self) -> usize {
+        self.items.len()
+    }
 }
 
 impl IntoContractCall for WithdrawalsBatch {

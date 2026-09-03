@@ -3,8 +3,6 @@
 
 use blockstack_lib::chainstate::stacks::TransactionContractCall;
 use blockstack_lib::chainstate::stacks::TransactionPayload;
-use blockstack_lib::chainstate::stacks::TransactionPostCondition;
-use blockstack_lib::chainstate::stacks::TransactionPostConditionMode;
 use blockstack_lib::clarity::vm::ClarityName;
 use blockstack_lib::clarity::vm::ContractName;
 use blockstack_lib::clarity::vm::Value as ClarityValue;
@@ -35,23 +33,6 @@ pub fn make_trait_identifier(deployer: StacksAddress) -> TraitIdentifier {
     }
 }
 
-/// A struct describing any transaction post-execution conditions that we'd
-/// like to enforce.
-///
-/// # Note
-///
-/// * SIP-005 describes the post conditions, including its limitations, and
-///   can be found here
-///   https://github.com/stacksgov/sips/blob/main/sips/sip-005/sip-005-blocks-and-transactions.md#transaction-post-conditions
-#[derive(Debug)]
-pub struct StacksTxPostConditions {
-    /// Specifies whether other asset transfers not covered by the
-    /// post-conditions are permitted.
-    pub post_condition_mode: TransactionPostConditionMode,
-    /// Any post-execution conditions that we'd like to enforce.
-    pub post_conditions: Vec<TransactionPostCondition>,
-}
-
 /// A trait to ease construction of a contract call StacksTransaction.
 pub trait IntoContractCall: Sized {
     /// The name of the clarity smart contract that relates to this struct.
@@ -75,17 +56,6 @@ pub trait IntoContractCall: Sized {
             function_args: self.into_contract_args(),
         };
         TransactionPayload::ContractCall(contract_call)
-    }
-    /// Any post-execution conditions that we'd like to enforce. The
-    /// deployer corresponds to the principal in the Transaction
-    /// post-conditions, which is the address that sent the asset. The
-    /// default is that we do not enforce any conditions since we usually
-    /// deployed the contract.
-    fn post_conditions(&self) -> StacksTxPostConditions {
-        StacksTxPostConditions {
-            post_condition_mode: TransactionPostConditionMode::Allow,
-            post_conditions: Vec::new(),
-        }
     }
 }
 

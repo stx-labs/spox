@@ -58,7 +58,7 @@ pub async fn process_reward_claims(mut rx: mpsc::Receiver<BlockRef>, context: Co
             tracing::warn!(%error, "error processing pending reward claims");
         }
 
-        if let Err(error) = process_pending_withdrawals(&context, &chain_tip).await {
+        if let Err(error) = process_withdrawals(&state, &chain_tip).await {
             tracing::warn!(%error, "error processing pending withdrawals");
         }
     }
@@ -119,11 +119,44 @@ async fn process_claims(state: &RewardClaimState, chain_tip: &BlockRef) -> Resul
 /// This function works as follows:
 /// 1. Gets all pending withdrawals from the registry.
 /// 2. Submits a settle-pending-withdrawals contract call for each batch of
-///    withdrawals, where a batch is a group of at most 100 stakers who are
-///    associated with the same signer-manager.
-async fn process_pending_withdrawals(_: &Context, chain_tip: &BlockRef) -> Result<(), Error> {
-    // TODO(#40/#42): fetch pending withdrawals and submit settle-pending-withdrawals.
-    tracing::debug!(%chain_tip, "reward withdrawal processing not yet implemented");
+///    withdrawals, where a batch is a group of at most 100 withdrawals who
+///    are associated with the same signer-manager.
+#[instrument(skip(state))]
+async fn process_withdrawals(state: &RewardClaimState, chain_tip: &BlockRef) -> Result<(), Error> {
+    let batches = state.registry.get_pending_withdrawal_batches().await?;
+    if batches.is_empty() {
+        tracing::info!("no pending reward withdrawals");
+        return Ok(());
+    }
+
+    for batch in batches {
+        tracing::info!(
+            "signer_manager" = %batch.signer_manager(),
+            "num_withdrawals" = %batch.num_withdrawals(),
+            "processing settle-pending-withdrawals batch",
+        );
+        let payload = batch.into_tx_payload();
+        let tx = state.wallet.sign_tx(payload, TX_FEE);
+
+        match state.client().submit_tx(&tx).await {
+            Ok(SubmitTxResponse::Acceptance(txid)) => {
+                tracing::info!(%txid, "submitted settle-pending-withdrawals batch");
+                state.increment_wallet_nonce();
+            }
+            Ok(SubmitTxResponse::Rejection(error)) => {
+                tracing::warn!(%error, "failed to submit settle-pending-withdrawals batch");
+            }
+            Err(error) => {
+                // It could be the case that we broadcast the transaction
+                // to the node and it was rejected by then we got an error
+                // here anyway. I don't see a clean way to handle this
+                // without adding another issue.
+                tracing::warn!(%error, "failed to submit settle-pending-withdrawals batch");
+            }
+        }
+    }
+
+    tracing::debug!(%chain_tip, "finished settle-pending-withdrawals submissions");
     Ok(())
 }
 

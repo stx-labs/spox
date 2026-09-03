@@ -114,7 +114,7 @@ impl StacksWallet {
             chain_id: self.chain_id,
             auth: TransactionAuth::Standard(Singlesig(auth)),
             anchor_mode: TransactionAnchorMode::Any,
-            post_condition_mode: TransactionPostConditionMode::Allow,
+            post_condition_mode: TransactionPostConditionMode::Deny,
             post_conditions: Vec::new(),
             payload,
         };
