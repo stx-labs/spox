@@ -87,14 +87,19 @@ plan:
       path: contracts/mock-signer-manager.clar
       clarity-version: 6
     - transaction-type: emulated-contract-publish
-      contract-name: registry
-      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-      path: contracts/registry.clar
-      clarity-version: 6
-    - transaction-type: emulated-contract-publish
       contract-name: reward-claim-registry
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       path: contracts/reward-claim-registry.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
+      contract-name: malicious-signer-manager
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/malicious-signer-manager.clar
+      clarity-version: 6
+    - transaction-type: emulated-contract-publish
+      contract-name: registry
+      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+      path: contracts/registry.clar
       clarity-version: 6
     - transaction-type: emulated-contract-publish
       contract-name: signer-manager

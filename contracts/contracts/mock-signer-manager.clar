@@ -16,6 +16,9 @@
 (define-data-var earned-amount uint u1000)
 (define-data-var withdrawal-id (optional uint) none)
 
+(define-data-var settle-should-err bool false)
+(define-data-var settle-err-code uint u1001)
+
 ;; pox-5 callback: always accept the stake so fixtures can register positions
 ;; under this mock without real signer-manager bookkeeping.
 ;; #[allow(unnecessary_public)]
@@ -97,7 +100,10 @@
   ;; #[allow(unused_binding)]
   (request-id uint)
 )
-  (ok true)
+  (if (var-get settle-should-err)
+    (err (var-get settle-err-code))
+    (ok true)
+  )
 )
 
 ;; #[allow(unnecessary_public)]
@@ -105,7 +111,10 @@
   ;; #[allow(unused_binding)]
   (request-id uint)
 )
-  (ok true)
+  (if (var-get settle-should-err)
+    (err (var-get settle-err-code))
+    (ok true)
+  )
 )
 
 ;; --- test setters ---
@@ -139,6 +148,20 @@
     (var-set claim-rewards-should-err should-error)
     ;; #[allow(unchecked_data)]
     (var-set claim-rewards-err-code code)
+    (ok true)
+  )
+)
+
+;; Configure settle-accepted-withdrawal / reclaim-failed-withdrawal:
+;; return (err code) when should-error, else (ok true).
+(define-public (set-settle-result
+    (should-error bool)
+    (code uint)
+  )
+  (begin
+    (var-set settle-should-err should-error)
+    ;; #[allow(unchecked_data)]
+    (var-set settle-err-code code)
     (ok true)
   )
 )

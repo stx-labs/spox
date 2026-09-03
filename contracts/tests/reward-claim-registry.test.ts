@@ -10,9 +10,16 @@ import {
   ERR_NOT_REGISTERED,
   ERR_SIGNER_MANAGER_MISMATCH,
   ERR_UNKNOWN_PENDING_WITHDRAWAL,
+  ERR_REENTRANT_CALL,
   ERR_UNAUTHORIZED,
   ERR_ZERO_FEE,
   FEE_PER_CLAIM,
+  MALICIOUS_SIGNER_MANAGER,
+  REENTER_ADD_CLAIMS,
+  REENTER_CANCEL,
+  REENTER_PROCESS_CLAIMS,
+  REENTER_REGISTER,
+  REENTER_SETTLE,
   addClaims,
   MOCK_SIGNER_MANAGER,
   SIGNER_MANAGER,
@@ -28,9 +35,11 @@ import {
   getPendingSettlements,
   getPendingClaims,
   getEarned,
+  getMaliciousLastReenterError,
   getRegistration,
   initialNextClaimDistribution,
   initPox5,
+  registerMaliciousSignerManager,
   mineUntilPastDistribution,
   processRewardClaim,
   registerForBond,
@@ -39,10 +48,13 @@ import {
   registerSignerManager,
   rejectWithdrawal,
   sbtcBalance,
+  setMaliciousReenterMode,
   setMockClaimRewardsResult,
   setMockClaimStakerResult,
+  setMockSettleResult,
   setupBond,
   stakeFor,
+  stakeForMalicious,
   stakeForMock,
   stakeWithPoxAddr,
   stxBalance,
@@ -1217,5 +1229,154 @@ describe("claim schedule invariants", () => {
         stxRegistration(2n, STX_FIRST_CLAIM_DIST + 2n),
       );
     });
+  });
+});
+
+// Clarity rejects calling the same public function already on the stack
+// (CircularReference). The guard is for *cross-function* reentry: a signer-manager
+// callback invoking process-reward-claims (private impl), cancel, or settle.
+describe("reentrancy", () => {
+  beforeEach(() => {
+    initPox5();
+    registerMaliciousSignerManager();
+    stakeForMalicious(wallet1, SIGNER_SET_MIN_USTX, 4n);
+    registerForClaims(
+      wallet1,
+      3n * FEE_PER_CLAIM,
+      wallet1,
+      MALICIOUS_SIGNER_MANAGER,
+      STX_START,
+      true,
+    );
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+  });
+
+  function expectSingleAdvance() {
+    expect(getRegistration(wallet1, MALICIOUS_SIGNER_MANAGER)).toBeSome(
+      stxRegistration(2n, STX_FIRST_CLAIM_DIST + 2n),
+    );
+  }
+
+  it("blocks process-reward-claims reentry from claim-staker-rewards", () => {
+    setMaliciousReenterMode(REENTER_PROCESS_CLAIMS, wallet1);
+    expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
+      Cl.none(),
+    );
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
+    expectSingleAdvance();
+  });
+
+  it("blocks cancel-registration reentry from claim-staker-rewards", () => {
+    const before = stxBalance(wallet1);
+    setMaliciousReenterMode(REENTER_CANCEL, wallet1);
+    expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
+      Cl.none(),
+    );
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
+    expectSingleAdvance();
+    expect(stxBalance(wallet1)).toBe(before);
+  });
+
+  it("blocks settle-pending-withdrawal reentry from claim-staker-rewards", () => {
+    setMaliciousReenterMode(REENTER_SETTLE, wallet1);
+    expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
+      Cl.none(),
+    );
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
+    expectSingleAdvance();
+  });
+
+  it("blocks process-reward-claims reentry from claim-rewards (pull path)", () => {
+    fundAndCalculateRewards(2000n, 1n);
+    expect(getEarned(MALICIOUS_SIGNER_MANAGER, 1n, Cl.none())).toBeGreaterThan(0n);
+
+    setMaliciousReenterMode(REENTER_PROCESS_CLAIMS, wallet1);
+    expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
+      Cl.none(),
+    );
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
+    expectSingleAdvance();
+  });
+
+  it("rejects add-claims reentry via authorize-staker-or-admin, not the reentrancy gate", () => {
+    setMaliciousReenterMode(REENTER_ADD_CLAIMS, wallet1);
+    expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
+      Cl.none(),
+    );
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_UNAUTHORIZED));
+    expectSingleAdvance();
+  });
+
+  it("rejects register-for-claims reentry via authorize-staker-or-admin, not the reentrancy gate", () => {
+    setMaliciousReenterMode(REENTER_REGISTER, wallet1);
+    expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
+      Cl.none(),
+    );
+    expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_UNAUTHORIZED));
+    expectSingleAdvance();
+  });
+});
+
+describe("batch settle SM error does not stick the reentrancy lock", () => {
+  beforeEach(() => {
+    initPox5();
+    registerSignerManager(SIGNER_PRIVATE_KEY);
+    registerMockSignerManager();
+    stakeWithPoxAddr(wallet2, SIGNER_SET_MIN_USTX, 2n, 100n);
+    stakeForMock(wallet3, SIGNER_SET_MIN_USTX, 4n);
+    registerForClaims(wallet2, 3n * FEE_PER_CLAIM, wallet2, SIGNER_MANAGER, STX_START, true);
+    registerForClaims(wallet3, 3n * FEE_PER_CLAIM, wallet3, MOCK_SIGNER_MANAGER, STX_START, true);
+    fundAndClaimSignerRewards(2000n, 1n);
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+  });
+
+  it("batch settle-pending-withdrawals still allows later gated calls after the SM errors", () => {
+    // Real L1 withdrawal so sbtc-registry has request-id 1 with an accepted status.
+    expect(processRewardClaim(wallet2, wallet2, SIGNER_MANAGER).result).toBeOk(Cl.some(Cl.uint(1)));
+    acceptWithdrawal(1n, 30n);
+
+    // Mock SM tracks that same request-id so settle dispatches to the mock.
+    setMockClaimStakerResult(false, 1001n, 1000n, Cl.some(Cl.uint(1)));
+    expect(processRewardClaim(wallet3, wallet3, MOCK_SIGNER_MANAGER).result).toBeOk(
+      Cl.some(Cl.uint(1)),
+    );
+
+    setMockSettleResult(true, 4242n);
+    expect(
+      simnet.callPublicFn(
+        "reward-claim-registry",
+        "settle-pending-withdrawals",
+        [
+          Cl.principal(MOCK_SIGNER_MANAGER),
+          Cl.list([
+            Cl.tuple({ staker: Cl.principal(wallet3), "request-id": Cl.uint(1) }),
+          ]),
+        ],
+        wallet2,
+      ).result,
+    ).toBeOk(Cl.uint(0));
+
+    // Lock was cleared: the SM error surfaces, not ERR_REENTRANT_CALL.
+    expect(
+      simnet.callPublicFn(
+        "reward-claim-registry",
+        "settle-pending-withdrawal",
+        [Cl.principal(wallet3), Cl.principal(MOCK_SIGNER_MANAGER), Cl.uint(1)],
+        wallet2,
+      ).result,
+    ).toBeErr(Cl.uint(4242));
+    expect(processRewardClaim(wallet3, wallet3, MOCK_SIGNER_MANAGER).result).toBeErr(
+      Cl.uint(ERR_ALREADY_CLAIMED),
+    );
+
+    setMockSettleResult(false);
+    expect(
+      simnet.callPublicFn(
+        "reward-claim-registry",
+        "settle-pending-withdrawal",
+        [Cl.principal(wallet3), Cl.principal(MOCK_SIGNER_MANAGER), Cl.uint(1)],
+        wallet2,
+      ).result,
+    ).toBeOk(Cl.bool(true));
   });
 });

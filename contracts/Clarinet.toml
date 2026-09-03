@@ -72,3 +72,8 @@ epoch = 4.0
 path = "contracts/mock-signer-manager.clar"
 clarity_version = 6
 epoch = 4.0
+
+[contracts.malicious-signer-manager]
+path = "contracts/malicious-signer-manager.clar"
+clarity_version = 6
+epoch = 4.0

@@ -31,6 +31,7 @@ export const wallet4 = accounts.get("wallet_4")!;
 
 export const SIGNER_MANAGER = `${deployer}.signer-manager`;
 export const MOCK_SIGNER_MANAGER = `${deployer}.mock-signer-manager`;
+export const MALICIOUS_SIGNER_MANAGER = `${deployer}.malicious-signer-manager`;
 export const SWEEP_REGISTRY = `${deployer}.reward-claim-registry`;
 export const SBTC_TOKEN =
   "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token";
@@ -60,6 +61,16 @@ const CHAIN_ID = 2147483648;
 export const SIGNER_PRIVATE_KEY = "a".repeat(63) + "1";
 /** Distinct key for mock-signer-manager so both can be registered in one simnet. */
 export const MOCK_SIGNER_PRIVATE_KEY = "b".repeat(63) + "1";
+/** Distinct key for malicious-signer-manager reentrancy tests. */
+export const MALICIOUS_SIGNER_PRIVATE_KEY = "c".repeat(63) + "1";
+
+/** Reentry modes for malicious-signer-manager.set-reenter-mode. */
+export const REENTER_NONE = 0n;
+export const REENTER_PROCESS_CLAIMS = 2n;
+export const REENTER_CANCEL = 3n;
+export const REENTER_SETTLE = 4n;
+export const REENTER_ADD_CLAIMS = 5n;
+export const REENTER_REGISTER = 6n;
 
 // reward-claim-registry error codes
 export const ERR_NOT_REGISTERED = 600n;
@@ -74,6 +85,7 @@ export const ERR_INVALID_START_REWARD_CYCLE = 608n;
 export const ERR_UNAUTHORIZED = 609n;
 export const ERR_ALREADY_REGISTERED = 610n;
 export const ERR_SIGNER_MANAGER_MISMATCH = 611n;
+export const ERR_REENTRANT_CALL = 612n;
 
 /** reward-claim-registry's default fee-per-sweep. */
 export const FEE_PER_CLAIM = 100_000n;
@@ -302,6 +314,68 @@ export function setMockClaimRewardsResult(shouldError: boolean, code = 1001n) {
   return simnet.callPublicFn(
     "mock-signer-manager",
     "set-claim-rewards-result",
+    [Cl.bool(shouldError), Cl.uint(code)],
+    deployer,
+  );
+}
+
+export function registerMaliciousSignerManager(
+  privateKey = MALICIOUS_SIGNER_PRIVATE_KEY,
+) {
+  const authId = authIdCounter++;
+  const signerKey = compressPublicKey(privateKeyToPublic(privateKey));
+  const signerSig = signSignerKeyGrant(MALICIOUS_SIGNER_MANAGER, authId, privateKey);
+  return simnet.callPublicFn(
+    "malicious-signer-manager",
+    "register-self",
+    [
+      Cl.principal(MALICIOUS_SIGNER_MANAGER),
+      Cl.bufferFromHex(signerKey),
+      Cl.uint(authId),
+      Cl.bufferFromHex(signerSig),
+    ],
+    deployer,
+  );
+}
+
+/** Stake `amount` uSTX under malicious-signer-manager. */
+export function stakeForMalicious(staker: string, amount: bigint, numCycles: bigint) {
+  return simnet.callPublicFn(
+    POX5,
+    "stake",
+    [
+      Cl.principal(MALICIOUS_SIGNER_MANAGER),
+      Cl.uint(amount),
+      Cl.uint(numCycles),
+      Cl.uint(burnHeight()),
+      Cl.none(),
+    ],
+    staker,
+  );
+}
+
+export function setMaliciousReenterMode(mode: bigint, staker: string) {
+  return simnet.callPublicFn(
+    "malicious-signer-manager",
+    "set-reenter-mode",
+    [Cl.uint(mode), Cl.principal(staker)],
+    deployer,
+  );
+}
+
+export function getMaliciousLastReenterError() {
+  return simnet.callReadOnlyFn(
+    "malicious-signer-manager",
+    "get-last-reenter-error",
+    [],
+    deployer,
+  ).result;
+}
+
+export function setMockSettleResult(shouldError: boolean, code = 1001n) {
+  return simnet.callPublicFn(
+    "mock-signer-manager",
+    "set-settle-result",
     [Cl.bool(shouldError), Cl.uint(code)],
     deployer,
   );

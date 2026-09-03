@@ -23,13 +23,16 @@
 (define-constant ERR_UNKNOWN_PENDING_WITHDRAWAL (err u607))
 ;; start-reward-cycle is before the position's first-reward-cycle
 (define-constant ERR_INVALID_START_REWARD_CYCLE (err u608))
-;; This is returned when the tx-sender is not allowed to register, add claims,
-;; or cancel for this staker.
+;; This is returned when the contract-caller is not allowed to register,
+;; add claims, or cancel for this staker.
 (define-constant ERR_UNAUTHORIZED (err u609))
 ;; A registration already exists for this staker and signer-manager
 (define-constant ERR_ALREADY_REGISTERED (err u610))
 ;; Signer-manager associated with staker does not match inputs
 (define-constant ERR_SIGNER_MANAGER_MISMATCH (err u611))
+;; A reentrant call into this contract was detected while a signer-manager
+;; call was in flight (same pattern as pox-5's ERR_REENTRANT_CALL).
+(define-constant ERR_REENTRANT_CALL (err u612))
 
 ;; A (list 100 uint) whose only job is to bound the get-pending-claims /
 ;; get-pending-settlements folds to at most 100 node visits per call. The
@@ -57,6 +60,14 @@
 
 ;; This is the amount of uSTX escrowed per claim installment when buying
 (define-data-var fee-per-cycle uint u100000)
+
+;; Reentrancy guard: prevents cross-function re-entry through signer-manager
+;; trait calls (mirrors pox-5's signer-manager-call-active).
+(define-data-var signer-manager-call-active bool false)
+
+(define-private (validate-no-reentrancy)
+    (ok (asserts! (not (var-get signer-manager-call-active)) ERR_REENTRANT_CALL))
+)
 
 (define-data-var registration-ll-head (optional {
     staker: principal,
@@ -552,21 +563,22 @@
 ;; Staker may act on their own registration; admins may register or top up
 ;; anyone. Cancel stays staker-only (see cancel-registration).
 (define-private (authorize-staker-or-admin (staker principal))
-    (ok (asserts! (or (is-eq tx-sender staker) (is-admin tx-sender)) ERR_UNAUTHORIZED))
+    (ok (asserts! (or (is-eq contract-caller staker) (is-admin contract-caller)) ERR_UNAUTHORIZED))
 )
 
-;; Escrow the STX fee for num-cycles installments unless tx-sender is an admin.
-;; Transfers into this contract. Returns the micro-STX amount escrowed.
+;; Escrow the STX fee for num-cycles installments unless contract-caller is
+;; an admin. Transfers into this contract. Returns the micro-STX amount
+;; escrowed.
 (define-private (escrow-registration-fee (num-cycles uint))
     (let (
             (price (var-get fee-per-cycle))
-            (amount (if (is-admin tx-sender)
+            (amount (if (is-admin contract-caller)
                 u0
                 (* num-cycles price)
             ))
         )
         (if (> amount u0)
-            (try! (stx-transfer? amount tx-sender current-contract))
+            (try! (stx-transfer? amount contract-caller current-contract))
             true
         )
         (ok amount)
@@ -583,7 +595,7 @@
 ;;
 ;; Parameters:
 ;;   staker                      The principal being registered. Must equal
-;;                               tx-sender unless the caller is an admin.
+;;                               contract-caller unless the caller is an admin.
 ;;   signer-manager              Together with staker forms the registration key.
 ;;                               Must be the signer pox-5 reports for the
 ;;                               position; every claim pulls from it.
@@ -595,8 +607,8 @@
 ;;                               false, up to two claims per reward cycle: step
 ;;                               of one, seeded on the first half, with catch-up
 ;;                               when a reward cycle is fully past.
-;;   fee                         STX paid by tx-sender. Buys the minimum of fee
-;;                               divided by fee-per-cycle and 192 installments.
+;;   fee                         STX paid by contract-caller. Buys the minimum of
+;;                               fee divided by fee-per-cycle and 192 installments.
 ;;                               Only the used portion is escrowed; any remainder
 ;;                               stays with the caller. Admins escrow nothing.
 ;;
@@ -642,7 +654,7 @@
             (print {
                 topic: "register-for-claims",
                 staker: staker,
-                registrant: tx-sender,
+                registrant: contract-caller,
                 signer-manager: signer,
                 start-reward-cycle: start-reward-cycle,
                 one-claim-per-reward-cycle: one-claim-per-reward-cycle,
@@ -660,10 +672,10 @@
 ;; later on advance.
 ;;
 ;; Parameters:
-;;   staker          The staker on the registration key. Must equal tx-sender
+;;   staker          The staker on the registration key. Must equal contract-caller
 ;;                   unless the caller is an admin.
 ;;   signer-manager  The signer-manager principal on the registration key.
-;;   fee             STX paid by tx-sender. Buys the minimum of fee divided by
+;;   fee             STX paid by contract-caller. Buys the minimum of fee divided by
 ;;                   fee-per-cycle and 192 installments. Only the used portion
 ;;                   is escrowed; any remainder stays with the caller. Admins
 ;;                   escrow nothing.
@@ -703,7 +715,7 @@
             (print {
                 topic: "add-claims",
                 staker: staker,
-                payer: tx-sender,
+                payer: contract-caller,
                 signer-manager: signer-manager,
                 num-cycles: num-cycles,
                 escrowed: escrowed,
@@ -720,12 +732,12 @@
 ;; key; those remain settleable via settle-pending-withdrawal.
 ;;
 ;; Parameters:
-;;   staker          The staker on the registration key. Must equal tx-sender.
+;;   staker          The staker on the registration key. Must equal contract-caller.
 ;;   signer-manager  The signer-manager principal on the registration key.
 ;;
 ;; Returns:
 ;;   ok with the micro-STX refunded to the staker, ERR_UNAUTHORIZED if
-;;   tx-sender is not the staker, or ERR_NOT_REGISTERED if no registration
+;;   contract-caller is not the staker, or ERR_NOT_REGISTERED if no registration
 ;;   exists for this key.
 ;;
 ;; #[allow(unchecked_data)]
@@ -733,29 +745,33 @@
         (staker principal)
         (signer-manager principal)
     )
-    (let (
-            (key {
-                staker: staker,
-                signer-manager: signer-manager,
-            })
-            (registration (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED))
-            (refund (get prepaid-ustx registration))
-        )
-        (asserts! (is-eq tx-sender staker) ERR_UNAUTHORIZED)
-        (map-delete registrations key)
-        (ll-remove key)
-        (begin
-            (if (> refund u0)
-                (try! (as-contract? ((with-stx refund)) (try! (stx-transfer? refund tx-sender staker))))
-                true
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (let (
+                (key {
+                    staker: staker,
+                    signer-manager: signer-manager,
+                })
+                (registration (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED))
+                (refund (get prepaid-ustx registration))
             )
-            (print {
-                topic: "cancel-registration",
-                staker: staker,
-                signer-manager: signer-manager,
-                refund: refund,
-            })
-            (ok refund)
+            (asserts! (is-eq contract-caller staker) ERR_UNAUTHORIZED)
+            (map-delete registrations key)
+            (ll-remove key)
+            (begin
+                (if (> refund u0)
+                    (try! (as-contract? ((with-stx refund)) (try! (stx-transfer? refund tx-sender staker))))
+                    true
+                )
+                (print {
+                    topic: "cancel-registration",
+                    staker: staker,
+                    signer-manager: signer-manager,
+                    refund: refund,
+                })
+                (ok refund)
+            )
         )
     )
 )
@@ -820,6 +836,81 @@
     )
 )
 
+;; Wrap a signer-manager `claim-rewards` call with the reentrancy guard.
+;; This should be the only way claim-rewards is invoked from this contract.
+;;
+;; #[allow(unchecked_data)]
+(define-private (signer-manager-claim-rewards
+        (signer-manager <reward-claim-signer-manager-trait>)
+        (bond-periods (list 6 uint))
+        (reward-cycle uint)
+    )
+    (begin
+        (asserts! (not (var-get signer-manager-call-active)) ERR_REENTRANT_CALL)
+        (var-set signer-manager-call-active true)
+        (let ((result (contract-call? signer-manager claim-rewards bond-periods reward-cycle)))
+            (var-set signer-manager-call-active false)
+            result
+        )
+    )
+)
+
+;; Wrap a signer-manager `claim-staker-rewards` call with the reentrancy guard.
+;; This should be the only way claim-staker-rewards is invoked from this contract.
+;;
+;; #[allow(unchecked_data)]
+(define-private (signer-manager-claim-staker-rewards
+        (signer-manager <reward-claim-signer-manager-trait>)
+        (staker principal)
+        (reward-cycle uint)
+        (bond-index (optional uint))
+    )
+    (begin
+        (asserts! (not (var-get signer-manager-call-active)) ERR_REENTRANT_CALL)
+        (var-set signer-manager-call-active true)
+        (let ((result (contract-call? signer-manager claim-staker-rewards staker reward-cycle bond-index)))
+            (var-set signer-manager-call-active false)
+            result
+        )
+    )
+)
+
+;; Wrap a signer-manager `settle-accepted-withdrawal` call with the reentrancy
+;; guard. This should be the only way it is invoked from this contract.
+;;
+;; #[allow(unchecked_data)]
+(define-private (signer-manager-settle-accepted-withdrawal
+        (signer-manager <reward-claim-signer-manager-trait>)
+        (request-id uint)
+    )
+    (begin
+        (asserts! (not (var-get signer-manager-call-active)) ERR_REENTRANT_CALL)
+        (var-set signer-manager-call-active true)
+        (let ((result (contract-call? signer-manager settle-accepted-withdrawal request-id)))
+            (var-set signer-manager-call-active false)
+            result
+        )
+    )
+)
+
+;; Wrap a signer-manager `reclaim-failed-withdrawal` call with the reentrancy
+;; guard. This should be the only way it is invoked from this contract.
+;;
+;; #[allow(unchecked_data)]
+(define-private (signer-manager-reclaim-failed-withdrawal
+        (signer-manager <reward-claim-signer-manager-trait>)
+        (request-id uint)
+    )
+    (begin
+        (asserts! (not (var-get signer-manager-call-active)) ERR_REENTRANT_CALL)
+        (var-set signer-manager-call-active true)
+        (let ((result (contract-call? signer-manager reclaim-failed-withdrawal request-id)))
+            (var-set signer-manager-call-active false)
+            result
+        )
+    )
+)
+
 ;; Used by process-reward-claim-impl after a claim-rewards pull or when none
 ;; was needed. Always advances one installment whether claim-staker-rewards
 ;; pays or errors, so an untrusted signer-manager cannot stall the registration.
@@ -844,7 +935,7 @@
         (bond-index (optional uint))
         (current-distribution-cycle uint)
     )
-    (match (contract-call? signer-manager claim-staker-rewards staker reward-cycle bond-index)
+    (match (signer-manager-claim-staker-rewards signer-manager staker reward-cycle bond-index)
         claim-result
         ;; paid: advance and record any L1 withdrawal for later settlement
         (let ((withdrawal-request (get withdrawal-request claim-result)))
@@ -935,7 +1026,7 @@
                 )
                 u0
             )
-            (match (contract-call? signer-manager claim-rewards
+            (match (signer-manager-claim-rewards signer-manager
                 (match bond-index
                     idx (list idx)
                     (list)
@@ -1020,8 +1111,12 @@
         (staker principal)
         (signer-manager <reward-claim-signer-manager-trait>)
     )
-    (process-reward-claim-impl staker signer-manager
-        (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle)
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (process-reward-claim-impl staker signer-manager
+            (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle)
+        )
     )
 )
 
@@ -1045,13 +1140,17 @@
         (signer-manager <reward-claim-signer-manager-trait>)
         (stakers (list 100 principal))
     )
-    (ok (get claimed
-        (fold count-claim stakers {
-            signer-manager: signer-manager,
-            current-distribution-cycle: (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle),
-            claimed: u0,
-        })
-    ))
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (ok (get claimed
+            (fold count-claim stakers {
+                signer-manager: signer-manager,
+                current-distribution-cycle: (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle),
+                claimed: u0,
+            })
+        ))
+    )
 )
 
 ;; Fold step for process-reward-claims: match each process-reward-claim-impl result so a
@@ -1224,8 +1323,8 @@
         (match (get status request)
             accepted (begin
                 (if accepted
-                    (try! (contract-call? signer-manager settle-accepted-withdrawal request-id))
-                    (try! (contract-call? signer-manager reclaim-failed-withdrawal request-id))
+                    (try! (signer-manager-settle-accepted-withdrawal signer-manager request-id))
+                    (try! (signer-manager-reclaim-failed-withdrawal signer-manager request-id))
                 )
                 (if (is-eq (get kept fold-result) (list))
                     (begin
@@ -1271,7 +1370,11 @@
         (signer-manager <reward-claim-signer-manager-trait>)
         (request-id uint)
     )
-    (settle-pending-withdrawal-impl staker signer-manager request-id)
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (settle-pending-withdrawal-impl staker signer-manager request-id)
+    )
 )
 
 ;; Batch settle-pending-withdrawal for one signer-manager. The trait must be a
@@ -1291,12 +1394,16 @@
             request-id: uint,
         }))
     )
-    (ok (get resolved
-        (fold count-settlement items {
-            signer-manager: signer-manager,
-            resolved: u0,
-        })
-    ))
+    (begin
+        ;; ensure no reentrancy through signer-manager trait calls
+        (try! (validate-no-reentrancy))
+        (ok (get resolved
+            (fold count-settlement items {
+                signer-manager: signer-manager,
+                resolved: u0,
+            })
+        ))
+    )
 )
 
 ;; Fold step for settle-pending-withdrawals: match each
