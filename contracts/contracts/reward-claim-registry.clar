@@ -2,6 +2,9 @@
 
 ;; The longest STX lock in PoX-5 is 96 reward cycles, which equals 192 distribution cycles
 (define-constant MAX_DISTRIBUTION_CYCLES u192)
+;; Minimum Bitcoin blocks after indexing before get-pending-settlements
+;; will consult sbtc-registry. Settle itself is not gated on this.
+(define-constant SETTLEMENT_MIN_BURN_AGE u7)
 
 ;; No registration for this staker and signer-manager combination
 (define-constant ERR_NOT_REGISTERED (err u600))
@@ -15,10 +18,6 @@
 (define-constant ERR_ZERO_FEE (err u604))
 ;; Nothing new to claim yet: next-claim-distribution has not fully elapsed
 (define-constant ERR_ALREADY_CLAIMED (err u605))
-;; This is thrown when there are more than 192 pending withdrawals for a
-;; registrant. This should not be reachable during PoX-5, which should not
-;; be around for more than 96 reward cycles.
-(define-constant ERR_TOO_MANY_PENDING (err u606))
 ;; The request-id is not a tracked pending withdrawal for this key
 (define-constant ERR_UNKNOWN_PENDING_WITHDRAWAL (err u607))
 ;; start-reward-cycle is before the position's first-reward-cycle
@@ -138,37 +137,45 @@
     }
 )
 
+;; One row per indexed L1 withdrawal. The value is the bitcoin block-height
+;; at which the withdrawal was indexed.
 (define-map pending-withdrawals
     {
         staker: principal,
         signer-manager: principal,
+        request-id: uint,
     }
-    (list 192 uint)
+    uint
 )
 
 (define-map pending-withdrawal-ll
     {
         staker: principal,
         signer-manager: principal,
+        request-id: uint,
     }
     {
         prev: (optional {
             staker: principal,
             signer-manager: principal,
+            request-id: uint,
         }),
         next: (optional {
             staker: principal,
             signer-manager: principal,
+            request-id: uint,
         }),
     }
 )
 (define-data-var pending-withdrawal-ll-head (optional {
     staker: principal,
     signer-manager: principal,
+    request-id: uint,
 }) none)
 (define-data-var pending-withdrawal-ll-tail (optional {
     staker: principal,
     signer-manager: principal,
+    request-id: uint,
 }) none)
 
 (define-private (min-uint
@@ -300,15 +307,16 @@
 )
 
 ;; --- Doubly-linked-list maintenance over pending-withdrawal-ll ---
-;; Same shape as the registration list, but tracking only keys with at least
-;; one outstanding withdrawal so get-pending-settlements can walk them directly.
+;; Same shape as the registration list, one node per indexed withdrawal so
+;; get-pending-settlements can walk them directly.
 
 ;; Append `key` at the tail of the pending-withdrawal list.
 ;;
 ;; #[allow(unchecked_data)]
-(define-private (pending-ll-append (key {
+(define-private (withdrawal-ll-append (key {
     staker: principal,
     signer-manager: principal,
+    request-id: uint,
 }))
     (let ((old-tail (var-get pending-withdrawal-ll-tail)))
         (map-set pending-withdrawal-ll key {
@@ -329,9 +337,10 @@
 ;; Splice `key` out of the pending-withdrawal list.
 ;;
 ;; #[allow(unchecked_data)]
-(define-private (pending-ll-remove (key {
+(define-private (withdrawal-ll-remove (key {
     staker: principal,
     signer-manager: principal,
+    request-id: uint,
 }))
     (match (map-get? pending-withdrawal-ll key)
         links (begin
@@ -938,12 +947,14 @@
     (match (signer-manager-claim-staker-rewards signer-manager staker reward-cycle bond-index)
         claim-result
         ;; paid: advance and record any L1 withdrawal for later settlement
-        (let ((withdrawal-request (get withdrawal-request claim-result)))
-            (try! (advance-registration key registration current-distribution-cycle))
-            (match withdrawal-request
-                id (try! (append-pending-withdrawal key id))
-                true
+        (let (
+                (withdrawal-request (get withdrawal-request claim-result))
+                (stored (match withdrawal-request
+                    id (append-pending-withdrawal key id)
+                    none
+                ))
             )
+            (try! (advance-registration key registration current-distribution-cycle))
             (print {
                 topic: "process-reward-claim",
                 staker: staker,
@@ -953,9 +964,9 @@
                 bond-index: bond-index,
                 earned: (get earned claim-result),
                 claim-error: none,
-                withdrawal-request: withdrawal-request,
+                withdrawal-request: stored,
             })
-            (ok withdrawal-request)
+            (ok stored)
         )
         err-code
         ;; not paid -- empty cycle, a zero share, or a claim failure. Advance
@@ -1063,9 +1074,53 @@
     )
 )
 
-;; Bookkeeping only. Appends `request-id` to key's pending-withdrawals entry
-;; (append + as-max-len? back to 192), erroring ERR_TOO_MANY_PENDING if full.
-;; Splices key into pending-withdrawal-ll if this is its first pending item.
+;; We only want to store request-ids that are for a live sBTC withdrawal,
+;; this function does that check.
+;; #[allow(unchecked_data)]
+(define-private (is-trackable-withdrawal (request-id uint))
+    (match (contract-call? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry get-withdrawal-request
+        request-id
+    )
+        request (is-none (get status request))
+        false
+    )
+)
+
+;; Drop the map entry and splice the node out of pending-withdrawal-ll.
+;; #[allow(unchecked_data)]
+(define-private (remove-pending-withdrawal (key {
+    staker: principal,
+    signer-manager: principal,
+    request-id: uint,
+}))
+    (begin
+        (map-delete pending-withdrawals key)
+        (withdrawal-ll-remove key)
+    )
+)
+
+;; Returns true when this indexed withdrawal is old enough and sBTC has
+;; resolved it. Used only by get-pending-settlements.
+;; #[allow(unchecked_data)]
+(define-private (withdrawal-ready-to-list
+        (request-id uint)
+        (stored-height uint)
+    )
+    (if (< burn-block-height (+ stored-height SETTLEMENT_MIN_BURN_AGE))
+        false
+        (match (contract-call? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry
+            get-withdrawal-request request-id
+        )
+            request (is-some (get status request))
+            false
+        )
+    )
+)
+
+;; Append `request-id` when it is a valid sBTC pending withdrawal. Returns
+;; some id if tracked (stored or already present), none if skipped. Records
+;; burn-block-height and adds an entry into the pending-withdrawal-ll
+;; linked list.
 ;;
 ;; #[allow(unchecked_data)]
 (define-private (append-pending-withdrawal
@@ -1075,17 +1130,22 @@
         })
         (request-id uint)
     )
-    (let (
-            (current (default-to (list) (map-get? pending-withdrawals key)))
-            (was-empty (is-eq current (list)))
-            (updated (unwrap! (as-max-len? (append current request-id) u192) ERR_TOO_MANY_PENDING))
+    (let ((full-key {
+            staker: (get staker key),
+            signer-manager: (get signer-manager key),
+            request-id: request-id,
+        }))
+        (if (is-trackable-withdrawal request-id)
+            (if (is-some (map-get? pending-withdrawals full-key))
+                (some request-id)
+                (begin
+                    (map-set pending-withdrawals full-key burn-block-height)
+                    (withdrawal-ll-append full-key)
+                    (some request-id)
+                )
+            )
+            none
         )
-        (map-set pending-withdrawals key updated)
-        (if was-empty
-            (pending-ll-append key)
-            true
-        )
-        (ok true)
     )
 )
 
@@ -1102,9 +1162,10 @@
 ;;
 ;; Returns:
 ;;
-;;   ok with some withdrawal request-id when an L1 withdrawal was initiated,
-;;   ok none for a direct sBTC payout or when the claim path advanced without
-;;   a payout, or an error if the registration is missing or not yet pending.
+;;   ok with some withdrawal request-id when an L1 withdrawal was stored for
+;;   later settlement, ok none for a direct sBTC payout, a skipped/invalid id,
+;;   or a claim path that advanced without a payout, or an error if the
+;;   registration is missing or not yet pending.
 ;;
 ;; #[allow(unchecked_data)]
 (define-public (process-reward-claim
@@ -1134,6 +1195,7 @@
 ;;   stakers         Up to 100 staker principals to process in order.
 ;;
 ;; Returns:
+;;
 ;;   ok with the number of stakers for which process-reward-claim-impl returned
 ;;   ok, including empty-cycle and claim-error advances.
 (define-public (process-reward-claims
@@ -1174,12 +1236,12 @@
     )
 )
 
-;; Fold step for get-pending-settlements. Reads the current node's pending
-;; request-ids, appends one row carrying the whole list, and advances `node`
-;; to the next entry. Every node in pending-withdrawal-ll has a nonempty
-;; pending-withdrawals entry (a node is spliced out when its list empties), so
-;; no filtering is needed and one row is emitted per node. Once `node` is none
-;; it is a no-op. `tick` is unused; it only bounds the iteration count.
+;; Fold step for get-pending-settlements.
+;;
+;; Visits one linked-list node, appends a row when the withdrawal is old
+;; enough and sBTC has resolved it, records `last-visited`, and advances
+;; `node`. Young or still-pending entries do not emit a row in the
+;; accumulators rows field.
 ;;
 ;; #[allow(unchecked_data)]
 (define-private (pending-settlements-step
@@ -1188,12 +1250,18 @@
             node: (optional {
                 staker: principal,
                 signer-manager: principal,
+                request-id: uint,
+            }),
+            last-visited: (optional {
+                staker: principal,
+                signer-manager: principal,
+                request-id: uint,
             }),
             rows: (list 100
                 {
                     staker: principal,
                     signer-manager: principal,
-                    request-ids: (list 192 uint),
+                    request-id: uint,
                 }
             ),
         })
@@ -1205,22 +1273,32 @@
                 none
             )))
             (match (map-get? pending-withdrawals key)
-                request-ids
-                (merge acc {
-                    node: next-node,
-                    rows: (default-to (get rows acc)
-                        (as-max-len?
-                            (append (get rows acc) {
-                                staker: (get staker key),
-                                signer-manager: (get signer-manager key),
-                                request-ids: request-ids,
-                            })
-                            u100
-                        )),
-                })
+                stored-height
+                (if (withdrawal-ready-to-list (get request-id key) stored-height)
+                    (merge acc {
+                        node: next-node,
+                        last-visited: (some key),
+                        rows: (default-to (get rows acc)
+                            (as-max-len?
+                                (append (get rows acc) {
+                                    staker: (get staker key),
+                                    signer-manager: (get signer-manager key),
+                                    request-id: (get request-id key),
+                                })
+                                u100
+                            )),
+                    })
+                    (merge acc {
+                        node: next-node,
+                        last-visited: (some key),
+                    })
+                )
                 ;; A linked-list node with no pending entry should never happen;
                 ;; skip it defensively rather than aborting the read.
-                (merge acc { node: next-node })
+                (merge acc {
+                    node: next-node,
+                    last-visited: (some key),
+                })
             )
         )
         ;; Past the tail: nothing left to visit.
@@ -1228,25 +1306,30 @@
     )
 )
 
-;; List keys with outstanding L1 withdrawal request-ids. Walks
-;; pending-withdrawal-ll from cursor, or from the head when cursor is none, and
-;; returns up to 100 rows. Every node has a nonempty pending-withdrawals entry,
-;; so each visited node yields exactly one row and a short page means the tail
-;; was reached. Rows are included whether or not their parent registration still
-;; exists. Does not check sbtc-registry status; the caller should check each
-;; request-id before paying gas to settle.
+;; List indexed L1 withdrawals that are ready to settle. Walks
+;; pending-withdrawal-ll from cursor, or from the head when cursor is none.
+;; A row is emitted only when at least SETTLEMENT_MIN_BURN_AGE Bitcoin
+;; blocks have passed since insert and sbtc-registry status indicated that
+;; it has been accepted or rejected. Use the returned `next` cursor: none
+;; means the walk hit the tail; some key means pass that key as the next
+;; `cursor` to resume after it. Rows are included whether or not their
+;; parent registration still exists.
 ;;
 ;; Parameters:
-;;   cursor  none to start at the head, or the last key from the previous page
-;;           so the walk resumes at that key's successor.
+;;
+;;   cursor  use none to start at the head. When some, it indicates where
+;;           to resume looking for pending settlements. The settlement for
+;;           this key is not included in the response.
 ;;
 ;; Returns:
-;;   ok wrapping a list of rows. Each row has staker, signer-manager, and
-;;   request-ids, every sbtc-registry request-id awaiting settlement for that
-;;   key, up to 192.
+;;
+;;   ok wrapping { rows, next }. Each row has staker, signer-manager, and
+;;   request-id. `next` is none at the tail, or the last visited key when
+;;   more nodes may remain.
 (define-read-only (get-pending-settlements (cursor (optional {
     staker: principal,
     signer-manager: principal,
+    request-id: uint,
 })))
     (let (
             ;; Resume just after `cursor` (the last key the caller handled), or
@@ -1258,42 +1341,34 @@
                 )
                 (var-get pending-withdrawal-ll-head)
             ))
-        )
-        ;; PENDING_TICKS is the elided (list 100 uint) bounding the walk to at most
-        ;; 100 node visits per call.
-        (ok (get rows
-            (fold pending-settlements-step PENDING_TICKS {
+            (walk (fold pending-settlements-step PENDING_TICKS {
                 node: start,
+                last-visited: none,
                 rows: (list),
-            })
-        ))
-    )
-)
-
-;; Fold step for settle-pending-withdrawal-impl: drops `target` from the list
-;; being rebuilt, recording whether it was found.
-(define-private (pending-withdrawal-fold-step
-        (request-id uint)
-        (acc {
-            target: uint,
-            found: bool,
-            kept: (list 192 uint),
+            }))
+            (next (match (get node walk)
+                more-to-do (get last-visited walk)
+                none
+            ))
+        )
+        (ok {
+            rows: (get rows walk),
+            next: next,
         })
-    )
-    (if (is-eq request-id (get target acc))
-        (merge acc { found: true })
-        (merge acc { kept: (default-to (get kept acc) (as-max-len? (append (get kept acc) request-id) u192)) })
     )
 )
 
 ;; Shared by settle-pending-withdrawal and the batch fold below. Reads the
 ;; pending item's status from sbtc-registry and:
-;;   pending (status none)     no-op. Calling early just costs the caller's gas.
-;;   accepted (some true)      calls signer-manager::settle-accepted-withdrawal.
-;;   rejected (some false)     calls signer-manager::reclaim-failed-withdrawal.
-;; Either resolved case removes the request-id from pending-withdrawals (deleting
-;; the entry and splicing out of pending-withdrawal-ll if that empties the list).
-;; No STX moves. Returns whether it resolved (true) or was still pending (false).
+;;
+;;   not indexed               ERR_UNKNOWN_PENDING_WITHDRAWAL
+;;   unknown to sbtc-registry  prune the id (ok true)
+;;   pending (none)            no-op (ok false)
+;;   accepted (some true)      call settle-accepted-withdrawal, always prune
+;;   rejected (some false)     call reclaim-failed-withdrawal, always prune
+;;
+;; SM errors do not influence our behavior. Returns whether the id was
+;; removed (true) or is still pending (false).
 ;;
 ;; #[allow(unchecked_data)]
 (define-private (settle-pending-withdrawal-impl
@@ -1301,58 +1376,51 @@
         (signer-manager <reward-claim-signer-manager-trait>)
         (request-id uint)
     )
-    (let (
-            (key {
-                staker: staker,
-                signer-manager: (contract-of signer-manager),
-            })
-            (current (unwrap! (map-get? pending-withdrawals key) ERR_UNKNOWN_PENDING_WITHDRAWAL))
-            (fold-result (fold pending-withdrawal-fold-step current {
-                target: request-id,
-                found: false,
-                kept: (list),
-            }))
-            (request (unwrap!
-                (contract-call? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry
-                    get-withdrawal-request request-id
-                )
-                ERR_UNKNOWN_PENDING_WITHDRAWAL
-            ))
+    (let ((key {
+            staker: staker,
+            signer-manager: (contract-of signer-manager),
+            request-id: request-id,
+        }))
+        (asserts! (is-some (map-get? pending-withdrawals key)) ERR_UNKNOWN_PENDING_WITHDRAWAL)
+        (match (contract-call? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry
+            get-withdrawal-request request-id
         )
-        (asserts! (get found fold-result) ERR_UNKNOWN_PENDING_WITHDRAWAL)
-        (match (get status request)
-            accepted (begin
-                (if accepted
-                    (try! (signer-manager-settle-accepted-withdrawal signer-manager request-id))
-                    (try! (signer-manager-reclaim-failed-withdrawal signer-manager request-id))
-                )
-                (if (is-eq (get kept fold-result) (list))
-                    (begin
-                        (map-delete pending-withdrawals key)
-                        (pending-ll-remove key)
+            request (match (get status request)
+                accepted (begin
+                    (if accepted
+                        (is-ok (signer-manager-settle-accepted-withdrawal signer-manager request-id))
+                        (is-ok (signer-manager-reclaim-failed-withdrawal signer-manager request-id))
                     )
-                    (map-set pending-withdrawals key (get kept fold-result))
+                    (remove-pending-withdrawal key)
+                    (print {
+                        topic: "settle-pending-withdrawal",
+                        staker: staker,
+                        signer-manager: (contract-of signer-manager),
+                        request-id: request-id,
+                        accepted: accepted,
+                    })
+                    (ok true)
                 )
+                (ok false)
+            )
+            (begin
+                (remove-pending-withdrawal key)
                 (print {
-                    topic: "settle-pending-withdrawal",
+                    topic: "prune-pending-withdrawal",
                     staker: staker,
                     signer-manager: (contract-of signer-manager),
                     request-id: request-id,
-                    accepted: accepted,
                 })
                 (ok true)
             )
-            (ok false)
         )
     )
 )
 
 ;; Resolve one pending withdrawal. Reads its status from sbtc-registry. When
-;; status is none the call is a no-op. When accepted, calls the signer-manager's
-;; settle-accepted-withdrawal. When rejected, calls reclaim-failed-withdrawal.
-;; Either resolved case removes the request-id from pending-withdrawals and
-;; splices the key out of pending-withdrawal-ll if that list becomes empty.
-;; Permissionless; the caller pays gas and receives nothing.
+;; the id is unknown to sbtc-registry it is pruned. When status is none the
+;; call is a no-op. When accepted or rejected, calls the signer-manager then
+;; always removes the id (even if the SM errors).
 ;;
 ;; Parameters:
 ;;   staker          The staker on the pending-withdrawal key.
@@ -1360,9 +1428,9 @@
 ;;   request-id      The sbtc-registry withdrawal request-id to settle.
 ;;
 ;; Returns:
-;;   ok true if the withdrawal was accepted or rejected and removed from the
-;;   pending list, ok false if it is still pending in sbtc-registry, or an
-;;   error if the request-id is not tracked for this key.
+;;   ok true if the id was removed (settled, pruned, or SM error), ok false if
+;;   it is still pending in sbtc-registry, or an error if the request-id is not
+;;   tracked for this staker and signer-manager.
 ;;
 ;; #[allow(unchecked_data)]
 (define-public (settle-pending-withdrawal
@@ -1386,7 +1454,7 @@
 ;;   items           Up to 100 tuples of staker and request-id.
 ;;
 ;; Returns:
-;;   ok with the number of items that resolved to accepted or rejected.
+;;   ok with the number of items that were removed from the pending list.
 (define-public (settle-pending-withdrawals
         (signer-manager <reward-claim-signer-manager-trait>)
         (items (list 100 {

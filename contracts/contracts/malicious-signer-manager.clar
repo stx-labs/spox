@@ -19,6 +19,7 @@
 (define-data-var reenter-mode uint REENTER_NONE)
 (define-data-var reenter-staker principal tx-sender)
 (define-data-var last-reenter-error (optional uint) none)
+(define-data-var withdrawal-id (optional uint) none)
 
 ;; pox-5 callback: always accept the stake.
 ;; #[allow(unnecessary_public)]
@@ -57,6 +58,7 @@
   )
 )
 
+;; #[allow(unchecked_data)]
 (define-private (note-reenter-err (err-code uint))
   (var-set last-reenter-error (some err-code))
 )
@@ -91,10 +93,12 @@
               err-v (note-reenter-err err-v)
             )
             (if (is-eq (var-get reenter-mode) REENTER_SETTLE)
-              (match (contract-call? .reward-claim-registry settle-pending-withdrawal
-                  (var-get reenter-staker)
+              (match (contract-call? .reward-claim-registry settle-pending-withdrawals
                   .mock-signer-manager
-                  u1
+                  (list {
+                    staker: (var-get reenter-staker),
+                    request-id: u1,
+                  })
                 )
                 ok-v (var-set last-reenter-error none)
                 err-v (note-reenter-err err-v)
@@ -144,7 +148,7 @@
     (attempt-reenter)
     (ok {
       earned: u0,
-      withdrawal-request: none,
+      withdrawal-request: (var-get withdrawal-id),
     })
   )
 )
@@ -199,6 +203,14 @@
     ;; #[allow(unchecked_data)]
     (var-set reenter-staker staker)
     (var-set last-reenter-error none)
+    (ok true)
+  )
+)
+
+(define-public (set-withdrawal-request (wid (optional uint)))
+  (begin
+    ;; #[allow(unchecked_data)]
+    (var-set withdrawal-id wid)
     (ok true)
   )
 )

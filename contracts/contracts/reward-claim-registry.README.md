@@ -8,7 +8,7 @@ Permissionless keeper contract that registers PoX-5 stakers for automated reward
 - **Cadence is chosen at registration.**
 - **Start cycle is explicit.** `start-reward-cycle` must be greater than or equal to the staker's `first-reward-cycle`.
 - **Catch-up is allowed.** When many distributions are already past, keepers may call `process-reward-claim` repeatedly.
-- **Always advance.** A failed `claim-rewards` or `claim-staker-rewards` still decrements `remaining-cycles`, burns one installment from escrow, and advances the schedule.
+- **Always advance.** A failed `claim-rewards` or `claim-staker-rewards` still decrements `remaining-cycles`, burns one installment from escrow, and advances the schedule. A junk or already-settled `withdrawal-request` is not stored and does not stall the claim.
 - **Self-heal pull.** If a signer manager has earned rewards in pox-5 for the reward cycle, the registry calls `claim-rewards` before `claim-staker-rewards`.
 - **Escrow then burn.** Fees are held as `prepaid-ustx` and burned one installment at a time when a claim is made. Admins do not need to escrow funds.
 - **Self-register (or admin).** Only the staker or an admin may `register-for-claims` / `add-claims`. Cancel is staker-only, including when an admin created the registration; remaining escrow is refunded to the staker.
@@ -19,5 +19,5 @@ Permissionless keeper contract that registers PoX-5 stakers for automated reward
 - Registration requires a **live** pox-5 stake under that signer-manager; bond-index is looked up, not passed.
 - Empty / failed claims still burn a claim installment from escrow.
 - Only the staker may `cancel-registration` (admins cannot cancel for them). Remaining `prepaid-ustx` is refunded to the staker; pending L1 withdrawals remain settleable.
-- Pending L1 withdrawals are capped at 192 per registration; settlement is a separate permissionless step after sBTC accept/reject.
-- `get-pending-claims` may return an empty `rows` list while `next` is still set. Paginate with `next` until it is `none`.
+- Live sBTC-pending requests are indexed one map row per `{staker, signer-manager, request-id}` regardless of who created the withdrawal. `get-pending-settlements` lists a row after 7 Bitcoin blocks and only if sBTC status indicates acceptance or rejection from the sbtc signer. `settle-pending-withdrawal` drops the ID once sBTC has resolved (or the request is missing), even if the signer-manager errors.
+- `get-pending-claims` and `get-pending-settlements` may return an empty `rows` list while `next` is still set. Paginate with `next` until it is `none`.

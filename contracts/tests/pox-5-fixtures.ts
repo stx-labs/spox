@@ -79,7 +79,6 @@ export const ERR_NOT_ADMIN = 602n;
 export const ERR_NO_CURRENT_POSITION = 603n;
 export const ERR_ZERO_FEE = 604n;
 export const ERR_ALREADY_CLAIMED = 605n;
-export const ERR_TOO_MANY_PENDING = 606n;
 export const ERR_UNKNOWN_PENDING_WITHDRAWAL = 607n;
 export const ERR_INVALID_START_REWARD_CYCLE = 608n;
 export const ERR_UNAUTHORIZED = 609n;
@@ -113,6 +112,14 @@ export function mineUntil(target: bigint) {
   if (target > current) {
     simnet.mineEmptyBurnBlocks(Number(target - current));
   }
+}
+
+/** Bitcoin blocks after indexing before get-pending-settlements consults sBTC. */
+export const SETTLEMENT_MIN_BURN_AGE = 7n;
+
+/** Mine enough burn blocks for an indexed withdrawal to pass the listing age gate. */
+export function mineUntilSettlementListable() {
+  simnet.mineEmptyBurnBlocks(Number(SETTLEMENT_MIN_BURN_AGE));
 }
 
 export function rewardCycleToBurnHeight(cycle: bigint): bigint {
@@ -359,6 +366,15 @@ export function setMaliciousReenterMode(mode: bigint, staker: string) {
     "malicious-signer-manager",
     "set-reenter-mode",
     [Cl.uint(mode), Cl.principal(staker)],
+    deployer,
+  );
+}
+
+export function setMaliciousWithdrawalRequest(wid: OptionalCV<UIntCV>) {
+  return simnet.callPublicFn(
+    "malicious-signer-manager",
+    "set-withdrawal-request",
+    [wid],
     deployer,
   );
 }
@@ -649,7 +665,7 @@ export function getPendingClaims(cursor: OptionalCV = Cl.none()) {
   ).result;
 }
 
-export function getPendingSettlements(cursor = Cl.none()) {
+export function getPendingSettlements(cursor: OptionalCV = Cl.none()) {
   return simnet.callReadOnlyFn(
     "reward-claim-registry",
     "get-pending-settlements",
@@ -678,6 +694,16 @@ export function rejectWithdrawal(requestId: bigint) {
     "reject-withdrawal-request",
     [Cl.uint(requestId), Cl.uint(0)],
     SBTC_SIGNER,
+  );
+}
+
+/** Direct signer-manager settle; deletes its map entry without touching the registry. */
+export function settleAcceptedWithdrawalOnSignerManager(requestId: bigint, sender: string) {
+  return simnet.callPublicFn(
+    "signer-manager",
+    "settle-accepted-withdrawal",
+    [Cl.uint(requestId)],
+    sender,
   );
 }
 
