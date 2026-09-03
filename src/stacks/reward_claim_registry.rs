@@ -63,6 +63,52 @@ pub struct PendingClaimsPage {
     pub next: Option<RegistrationKey>,
 }
 
+/// Key identifying a pending withdrawal in the reward claim registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementKey {
+    /// The staker principal on the pending withdrawal.
+    pub staker: PrincipalData,
+    /// The signer-manager principal on the pending withdrawal.
+    pub signer_manager: PrincipalData,
+    /// The sBTC withdrawal request ID.
+    pub request_id: u128,
+}
+
+/// A single pending settlement row from `get-pending-settlements`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSettlement {
+    /// The signer-manager principal for this pending withdrawal.
+    pub signer_manager: QualifiedContractIdentifier,
+    /// The staker principal for this pending withdrawal.
+    pub staker: PrincipalData,
+    /// The sBTC withdrawal request ID to settle.
+    pub request_id: u128,
+}
+
+impl PendingSettlement {
+    /// Settlement key for this row.
+    pub fn settlement_key(&self) -> SettlementKey {
+        SettlementKey {
+            staker: self.staker.clone(),
+            signer_manager: PrincipalData::Contract(self.signer_manager.clone()),
+            request_id: self.request_id,
+        }
+    }
+}
+
+/// One page from `get-pending-settlements`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSettlementsPage {
+    /// Pending settlement rows found during this bounded walk.
+    pub settlements: Vec<PendingSettlement>,
+    /// Cursor to pass to the next `get_pending_settlements` call.
+    ///
+    /// `None` means the walk reached the tail of the pending-withdrawal
+    /// list. `Some` is the last visited settlement key, which may not be
+    /// a settleable row itself.
+    pub next: Option<SettlementKey>,
+}
+
 /// Arguments for one `process-reward-claims` contract call.
 ///
 /// All [`Self::stakers`] share [`Self::signer_manager`], and the list
@@ -210,6 +256,86 @@ impl RewardClaimRegistry {
         let claims = self.get_all_pending_claims().await?;
         Ok(batch_claims(claims, &self.deployer))
     }
+
+    /// Fetch a page of pending settlements from the registry.
+    ///
+    /// Pass `None` for `cursor` to start at the head of the pending-
+    /// withdrawal linked list. To paginate, pass
+    /// [`PendingSettlementsPage::next`] from the previous page.
+    /// `next == None` means the walk reached the tail; an empty
+    /// `settlements` list alone does not.
+    async fn get_pending_settlements(
+        &self,
+        cursor: Option<&SettlementKey>,
+        chain_tip: Option<&StacksBlockId>,
+    ) -> Result<PendingSettlementsPage, Error> {
+        let cursor_arg = match cursor {
+            Some(key) => {
+                let tuple = TupleData::from_data(vec![
+                    (
+                        ClarityName::from("staker"),
+                        ClarityValue::Principal(key.staker.clone()),
+                    ),
+                    (
+                        ClarityName::from("signer-manager"),
+                        ClarityValue::Principal(key.signer_manager.clone()),
+                    ),
+                    (
+                        ClarityName::from("request-id"),
+                        ClarityValue::UInt(key.request_id),
+                    ),
+                ])
+                .map_err(|_| Error::InvalidStacksResponse("could not construct cursor tuple"))?;
+                ClarityValue::some(ClarityValue::Tuple(tuple)).map_err(|_| {
+                    Error::InvalidStacksResponse("could not construct cursor option")
+                })?
+            }
+            None => ClarityValue::none(),
+        };
+
+        let result = self
+            .client
+            .call_read(
+                &self.deployer,
+                &self.contract_name,
+                &ClarityName::from("get-pending-settlements"),
+                &self.deployer,
+                &[cursor_arg],
+                chain_tip,
+            )
+            .await?;
+
+        let ClarityValue::Response(response) = result else {
+            return Err(Error::InvalidStacksResponse("expected a response"));
+        };
+
+        PendingSettlementsPage::try_from(*response.data)
+    }
+
+    /// Fetch every pending settlement by paging through
+    /// `get-pending-settlements`.
+    ///
+    /// Continues while the page's `next` cursor is `Some`.
+    pub async fn get_all_pending_settlements(&self) -> Result<Vec<PendingSettlement>, Error> {
+        let mut all = Vec::new();
+        let mut cursor: Option<SettlementKey> = None;
+
+        let tip = self.client.get_node_info().await?.chain_tip();
+        let chain_tip = Some(&tip);
+
+        loop {
+            let page = self
+                .get_pending_settlements(cursor.as_ref(), chain_tip)
+                .await?;
+            all.extend(page.settlements);
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+
+        Ok(all)
+    }
 }
 
 /// Group pending claims by signer-manager and split into contract-call batches.
@@ -303,6 +429,62 @@ impl TryFrom<ClarityValue> for PendingClaimsPage {
     }
 }
 
+impl TryFrom<ClarityValue> for SettlementKey {
+    type Error = Error;
+
+    fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
+        let mut clarity_map = ClarityTuple::try_from(value)?;
+        Ok(SettlementKey {
+            staker: clarity_map.remove_principal("staker")?,
+            signer_manager: clarity_map.remove_principal("signer-manager")?,
+            request_id: clarity_map.remove_uint("request-id")?,
+        })
+    }
+}
+
+impl TryFrom<ClarityValue> for PendingSettlement {
+    type Error = Error;
+
+    fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
+        let mut clarity_map = ClarityTuple::try_from(value)?;
+
+        let signer_manager = clarity_map.remove_principal("signer-manager")?;
+        let PrincipalData::Contract(signer_manager) = signer_manager else {
+            // This should never happen, because registration checks that
+            // the signer manager implements a trait and only smart
+            // contract principals can implement traits.
+            return Err(Error::UnexpectedPrincipal(signer_manager));
+        };
+
+        Ok(PendingSettlement {
+            signer_manager,
+            staker: clarity_map.remove_principal("staker")?,
+            request_id: clarity_map.remove_uint("request-id")?,
+        })
+    }
+}
+
+impl TryFrom<ClarityValue> for PendingSettlementsPage {
+    type Error = Error;
+
+    fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
+        let mut clarity_map = ClarityTuple::try_from(value)?;
+
+        let settlements = clarity_map
+            .remove_list("rows")?
+            .into_iter()
+            .map(PendingSettlement::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let next = clarity_map
+            .remove_option("next")?
+            .map(SettlementKey::try_from)
+            .transpose()?;
+
+        Ok(PendingSettlementsPage { settlements, next })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bitcoincore_rpc::jsonrpc::serde_json;
@@ -355,8 +537,70 @@ mod tests {
         }
     }
 
+    impl From<&PendingSettlement> for ClarityValue {
+        fn from(value: &PendingSettlement) -> Self {
+            let tuple_entries = vec![
+                (
+                    ClarityName::from("signer-manager"),
+                    ClarityValue::Principal(PrincipalData::Contract(value.signer_manager.clone())),
+                ),
+                (
+                    ClarityName::from("staker"),
+                    ClarityValue::Principal(value.staker.clone()),
+                ),
+                (
+                    ClarityName::from("request-id"),
+                    ClarityValue::UInt(value.request_id),
+                ),
+            ];
+            ClarityValue::Tuple(TupleData::from_data(tuple_entries).unwrap())
+        }
+    }
+
+    impl From<&SettlementKey> for ClarityValue {
+        fn from(value: &SettlementKey) -> Self {
+            let tuple_entries = vec![
+                (
+                    ClarityName::from("staker"),
+                    ClarityValue::Principal(value.staker.clone()),
+                ),
+                (
+                    ClarityName::from("signer-manager"),
+                    ClarityValue::Principal(value.signer_manager.clone()),
+                ),
+                (
+                    ClarityName::from("request-id"),
+                    ClarityValue::UInt(value.request_id),
+                ),
+            ];
+            ClarityValue::Tuple(TupleData::from_data(tuple_entries).unwrap())
+        }
+    }
+
     fn ok_page(claims: &[PendingClaim], next: Option<&RegistrationKey>) -> ClarityValue {
         let rows: Vec<ClarityValue> = claims.iter().map(ClarityValue::from).collect();
+        let next_value = match next {
+            Some(key) => ClarityValue::some(ClarityValue::from(key)).unwrap(),
+            None => ClarityValue::none(),
+        };
+        let page = ClarityValue::Tuple(
+            TupleData::from_data(vec![
+                (
+                    ClarityName::from("rows"),
+                    ClarityValue::cons_list_unsanitized(rows).unwrap(),
+                ),
+                (ClarityName::from("next"), next_value),
+            ])
+            .unwrap(),
+        );
+        ClarityValue::okay(page).unwrap()
+    }
+
+    fn ok_settlements_page(
+        settlements: &[PendingSettlement],
+        next: Option<&SettlementKey>,
+    ) -> ClarityValue {
+        let rows: Vec<ClarityValue> = settlements.iter().map(ClarityValue::from).collect();
         let next_value = match next {
             Some(key) => ClarityValue::some(ClarityValue::from(key)).unwrap(),
             None => ClarityValue::none(),
@@ -728,5 +972,272 @@ mod tests {
             claims[MAX_STAKERS_LENGTH - 1].staker
         );
         assert_eq!(batches[1].stakers()[0], claims[MAX_STAKERS_LENGTH].staker);
+    }
+
+    #[tokio::test]
+    async fn get_pending_settlements_works_without_cursor() {
+        let staker = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
+        let signer_manager = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+
+        let settlement = PendingSettlement {
+            signer_manager,
+            staker: staker.clone(),
+            request_id: 7,
+        };
+        let next = settlement.settlement_key();
+
+        let raw_json_response = format!(
+            r#"{{"okay": true, "result":"0x{}"}}"#,
+            ok_settlements_page(&[settlement.clone()], Some(&next))
+                .serialize_to_hex()
+                .unwrap(),
+        );
+
+        let path = "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip=latest";
+        let mut stacks_node_server = mockito::Server::new_async().await;
+        let mock = stacks_node_server
+            .mock("POST", path)
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "arguments": [ClarityValue::none().serialize_to_hex().unwrap()]
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(&raw_json_response)
+            .expect(1)
+            .create();
+
+        let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
+        let client = StacksClient::new(client_url).unwrap();
+
+        let registry = RewardClaimRegistry::new(
+            QualifiedContractIdentifier::parse(
+                "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.reward-claim-registry",
+            )
+            .unwrap(),
+            client,
+        );
+
+        let result = registry.get_pending_settlements(None, None).await.unwrap();
+        let expected = PendingSettlementsPage {
+            settlements: vec![settlement],
+            next: Some(next),
+        };
+        assert_eq!(result, expected);
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn get_pending_settlements_works_with_cursor() {
+        let staker = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
+        let signer_manager = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+
+        let cursor = SettlementKey {
+            staker: staker.clone(),
+            signer_manager: PrincipalData::Contract(signer_manager.clone()),
+            request_id: 1,
+        };
+
+        let settlement = PendingSettlement {
+            signer_manager,
+            staker: PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
+            request_id: 99,
+        };
+
+        let cursor_hex = ClarityValue::some(ClarityValue::from(&cursor))
+            .unwrap()
+            .serialize_to_hex()
+            .unwrap();
+
+        let raw_json_response = format!(
+            r#"{{"okay": true, "result":"0x{}"}}"#,
+            ok_settlements_page(&[settlement.clone()], None)
+                .serialize_to_hex()
+                .unwrap(),
+        );
+
+        let mut stacks_node_server = mockito::Server::new_async().await;
+        let mock = stacks_node_server
+            .mock(
+                "POST",
+                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip=latest",
+            )
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "arguments": [cursor_hex]
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(&raw_json_response)
+            .expect(1)
+            .create();
+
+        let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
+        let client = StacksClient::new(client_url).unwrap();
+
+        let registry = RewardClaimRegistry::new(
+            QualifiedContractIdentifier::parse(
+                "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.reward-claim-registry",
+            )
+            .unwrap(),
+            client,
+        );
+
+        let result = registry
+            .get_pending_settlements(Some(&cursor), None)
+            .await
+            .unwrap();
+
+        let expected = PendingSettlementsPage {
+            settlements: vec![settlement],
+            next: None,
+        };
+        assert_eq!(result, expected);
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn get_pending_settlements_empty_page_at_tail() {
+        let raw_json_response = format!(
+            r#"{{"okay": true, "result":"0x{}"}}"#,
+            ok_settlements_page(&[], None).serialize_to_hex().unwrap(),
+        );
+
+        let mut stacks_node_server = mockito::Server::new_async().await;
+        let mock = stacks_node_server
+            .mock(
+                "POST",
+                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip=latest",
+            )
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(&raw_json_response)
+            .expect(1)
+            .create();
+
+        let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
+        let client = StacksClient::new(client_url).unwrap();
+
+        let registry = RewardClaimRegistry::new(
+            QualifiedContractIdentifier::parse(
+                "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.reward-claim-registry",
+            )
+            .unwrap(),
+            client,
+        );
+
+        let result = registry.get_pending_settlements(None, None).await.unwrap();
+
+        let expected = PendingSettlementsPage {
+            settlements: vec![],
+            next: None,
+        };
+        assert_eq!(result, expected);
+        mock.assert();
+    }
+
+    #[tokio::test]
+    async fn get_all_pending_settlements_continues_on_empty_rows_with_next() {
+        let signer_manager = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+
+        // First page: ticks burned on non-settleable nodes, resume cursor only.
+        let skipped = SettlementKey {
+            staker: PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap(),
+            signer_manager: PrincipalData::Contract(signer_manager.clone()),
+            request_id: 3,
+        };
+        let pending = PendingSettlement {
+            signer_manager: signer_manager.clone(),
+            staker: PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
+            request_id: 99,
+        };
+
+        let skipped_hex = ClarityValue::some(ClarityValue::from(&skipped))
+            .unwrap()
+            .serialize_to_hex()
+            .unwrap();
+
+        let stacks_tip = "b5f9aa4423ffa7abb585fc00e2783c40225597ec112ee618db86ae23dbbbe88c";
+        let stacks_tip_consensus_hash = "dfe87cfd31c1a67fa8b989c83b79aa476e616758";
+        let tip = StacksBlockId::new(
+            &ConsensusHash::from_hex(stacks_tip_consensus_hash).unwrap(),
+            &BlockHeaderHash::from_hex(stacks_tip).unwrap(),
+        );
+
+        let mut stacks_node_server = mockito::Server::new_async().await;
+        let info_mock = stacks_node_server
+            .mock("GET", "/v2/info")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(
+                r#"{{
+                    "network_id": 2147483648,
+                    "stacks_tip": "{stacks_tip}",
+                    "stacks_tip_consensus_hash": "{stacks_tip_consensus_hash}"
+                }}"#
+            ))
+            .expect(1)
+            .create();
+
+        let path = format!(
+            "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip={tip}"
+        );
+
+        let empty_with_next = stacks_node_server
+            .mock("POST", path.as_str())
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "arguments": [ClarityValue::none().serialize_to_hex().unwrap()]
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(
+                r#"{{"okay": true, "result":"0x{}"}}"#,
+                ok_settlements_page(&[], Some(&skipped))
+                    .serialize_to_hex()
+                    .unwrap(),
+            ))
+            .expect(1)
+            .create();
+
+        let pending_then_done = stacks_node_server
+            .mock("POST", path.as_str())
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "arguments": [skipped_hex]
+            })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(
+                r#"{{"okay": true, "result":"0x{}"}}"#,
+                ok_settlements_page(&[pending.clone()], None)
+                    .serialize_to_hex()
+                    .unwrap(),
+            ))
+            .expect(1)
+            .create();
+
+        let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
+        let client = StacksClient::new(client_url).unwrap();
+
+        let registry = RewardClaimRegistry::new(
+            QualifiedContractIdentifier::parse(
+                "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.reward-claim-registry",
+            )
+            .unwrap(),
+            client,
+        );
+
+        let result = registry.get_all_pending_settlements().await.unwrap();
+
+        assert_eq!(result, vec![pending]);
+        info_mock.assert();
+        empty_with_next.assert();
+        pending_then_done.assert();
     }
 }
