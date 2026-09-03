@@ -380,6 +380,7 @@ dependencies = [
  "integer-sqrt",
  "lazy_static",
  "regex",
+ "rusqlite",
  "serde",
  "serde_derive",
  "serde_json",
@@ -411,8 +412,10 @@ source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790
 dependencies = [
  "lazy_static",
  "regex",
+ "rusqlite",
  "serde",
  "serde_derive",
+ "serde_json",
  "slog",
  "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5)",
 ]
@@ -2740,8 +2743,11 @@ dependencies = [
  "hashbrown 0.15.4",
  "lazy_static",
  "libsecp256k1",
+ "nix",
  "p256",
+ "rand 0.8.6",
  "ripemd",
+ "rusqlite",
  "secp256k1 0.24.3",
  "serde",
  "serde_derive",
@@ -2752,6 +2758,39 @@ dependencies = [
  "slog-term",
  "thiserror 1.0.69",
  "toml 0.5.11",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "stackslib"
+version = "0.0.1"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
+dependencies = [
+ "clarity",
+ "ed25519-dalek",
+ "lazy_static",
+ "libstackerdb",
+ "mio 0.6.23",
+ "nix",
+ "percent-encoding",
+ "pox-locking",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "regex",
+ "ripemd",
+ "rusqlite",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2 0.10.9",
+ "siphasher",
+ "slog",
+ "stacks-common",
+ "time",
+ "toml 0.5.11",
+ "url",
+ "winapi 0.3.9",
 ]
 
 [[package]]
