@@ -32,10 +32,6 @@ pub enum Error {
     #[error("clarity construction error: {0:?}")]
     ClarityTuple(Box<clarity::vm::errors::ClarityTypeError>),
 
-    /// Could not construct a clarity value.
-    #[error("clarity construction error: {0:?}")]
-    ClarityTuple(Box<clarity::vm::errors::Error>),
-
     /// Missing an expected tuple entry. This shouldn't happen.
     #[error("missing an expected tuple entry: {0}")]
     ClarityMissingTupleEntry(&'static str),
