@@ -114,12 +114,12 @@ export function mineUntil(target: bigint) {
   }
 }
 
-/** Bitcoin blocks after indexing before get-pending-settlements consults sBTC. */
-export const SETTLEMENT_MIN_BURN_AGE = 7n;
+/** Bitcoin blocks after indexing before get-pending-withdrawals consults sBTC. */
+export const WITHDRAWAL_MIN_BURN_AGE = 7n;
 
 /** Mine enough burn blocks for an indexed withdrawal to pass the listing age gate. */
-export function mineUntilSettlementListable() {
-  simnet.mineEmptyBurnBlocks(Number(SETTLEMENT_MIN_BURN_AGE));
+export function mineUntilWithdrawalListable() {
+  simnet.mineEmptyBurnBlocks(Number(WITHDRAWAL_MIN_BURN_AGE));
 }
 
 export function rewardCycleToBurnHeight(cycle: bigint): bigint {
@@ -665,10 +665,10 @@ export function getPendingClaims(cursor: OptionalCV = Cl.none()) {
   ).result;
 }
 
-export function getPendingSettlements(cursor: OptionalCV = Cl.none()) {
+export function getPendingWithdrawals(cursor: OptionalCV = Cl.none()) {
   return simnet.callReadOnlyFn(
     "reward-claim-registry",
-    "get-pending-settlements",
+    "get-pending-withdrawals",
     [cursor],
     deployer,
   ).result;

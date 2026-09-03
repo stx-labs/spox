@@ -32,7 +32,7 @@ import {
   deployer,
   fundAndCalculateRewards,
   fundAndClaimSignerRewards,
-  getPendingSettlements,
+  getPendingWithdrawals,
   getPendingClaims,
   getEarned,
   getMaliciousLastReenterError,
@@ -41,7 +41,7 @@ import {
   initPox5,
   registerMaliciousSignerManager,
   mineUntilPastDistribution,
-  mineUntilSettlementListable,
+  mineUntilWithdrawalListable,
   processRewardClaim,
   registerForBond,
   registerForClaims,
@@ -139,7 +139,7 @@ function pendingClaimsPage(
   });
 }
 
-function settlementRow(staker: string, requestId: bigint, signerManager = SIGNER_MANAGER) {
+function withdrawalRow(staker: string, requestId: bigint, signerManager = SIGNER_MANAGER) {
   return Cl.tuple({
     staker: Cl.principal(staker),
     "signer-manager": Cl.principal(signerManager),
@@ -147,8 +147,8 @@ function settlementRow(staker: string, requestId: bigint, signerManager = SIGNER
   });
 }
 
-function pendingSettlementsPage(
-  rows: ReturnType<typeof settlementRow>[],
+function pendingWithdrawalsPage(
+  rows: ReturnType<typeof withdrawalRow>[],
   next: ClarityValue = Cl.none(),
 ) {
   return Cl.tuple({
@@ -523,9 +523,9 @@ describe("cancel-registration", () => {
     expect(getRegistration(wallet2, SIGNER_MANAGER)).toBeNone();
 
     acceptWithdrawal(1n, 30n);
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([settlementRow(wallet2, 1n)]),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([withdrawalRow(wallet2, 1n)]),
     );
     expect(
       simnet.callPublicFn(
@@ -535,7 +535,7 @@ describe("cancel-registration", () => {
         wallet3,
       ).result,
     ).toBeOk(Cl.bool(true));
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 });
 
@@ -1009,7 +1009,7 @@ describe("bond path", () => {
   });
 });
 
-describe("L1 withdrawal path + settlements", () => {
+describe("L1 withdrawal path + pending withdrawals", () => {
   beforeEach(() => {
     initPox5();
     registerSignerManager(SIGNER_PRIVATE_KEY);
@@ -1024,30 +1024,30 @@ describe("L1 withdrawal path + settlements", () => {
   it("records a withdrawal request-id and lists it once accepted and old enough", () => {
     const { result } = processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
     expect(result).toBeOk(Cl.some(Cl.uint(1)));
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
 
     acceptWithdrawal(1n, 30n);
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
 
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([settlementRow(wallet1, 1n)]),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([withdrawalRow(wallet1, 1n)]),
     );
   });
 
   it("does not list a still-pending withdrawal even after the age gate", () => {
     processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 
-  it("settles an ACCEPTED withdrawal and clears it from the settlement list", () => {
+  it("settles an ACCEPTED withdrawal and clears it from the pending-withdrawal list", () => {
     processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
     acceptWithdrawal(1n, 30n);
     const { result } = settlePendingWithdrawal(wallet1, 1n, wallet2);
     expect(result).toBeOk(Cl.bool(true));
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 
   it("settles a REJECTED withdrawal (reclaims to the staker) and clears it", () => {
@@ -1055,15 +1055,15 @@ describe("L1 withdrawal path + settlements", () => {
     rejectWithdrawal(1n);
     const { result } = settlePendingWithdrawal(wallet1, 1n, wallet2);
     expect(result).toBeOk(Cl.bool(true));
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 
   it("is a no-op while the withdrawal is still pending", () => {
     processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
     expect(settlePendingWithdrawal(wallet1, 1n, wallet2).result).toBeOk(Cl.bool(false));
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 
   it("errors on an unknown pending withdrawal", () => {
@@ -1077,13 +1077,13 @@ describe("L1 withdrawal path + settlements", () => {
     processRewardClaim(wallet1, wallet1, SIGNER_MANAGER);
     acceptWithdrawal(1n, 30n);
     expect(settleAcceptedWithdrawalOnSignerManager(1n, wallet2).result).toBeOk(Cl.bool(true));
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([settlementRow(wallet1, 1n)]),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([withdrawalRow(wallet1, 1n)]),
     );
 
     expect(settlePendingWithdrawal(wallet1, 1n, wallet2).result).toBeOk(Cl.bool(true));
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 
   it("batch settle-pending-withdrawals resolves accepted items and counts them", () => {
@@ -1102,8 +1102,8 @@ describe("L1 withdrawal path + settlements", () => {
       wallet2,
     );
     expect(result).toBeOk(Cl.uint(1));
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
   });
 
   it("process-reward-claims records withdrawal request-ids", () => {
@@ -1117,14 +1117,14 @@ describe("L1 withdrawal path + settlements", () => {
 
     acceptWithdrawal(1n, 30n);
     acceptWithdrawal(2n, 30n);
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([settlementRow(wallet1, 1n), settlementRow(wallet2, 2n)]),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([withdrawalRow(wallet1, 1n), withdrawalRow(wallet2, 2n)]),
     );
   });
 });
 
-describe("get-pending-settlements pagination", () => {
+describe("get-pending-withdrawals pagination", () => {
   it(
     "paginates past not-yet-settleable withdrawals across >100 ids (Rust get_all style)",
     () => {
@@ -1201,7 +1201,7 @@ describe("get-pending-settlements pagination", () => {
         }
       }
 
-      mineUntilSettlementListable();
+      mineUntilWithdrawalListable();
 
       const expectedIds: bigint[] = [];
       for (let i = 0; i < TOTAL_STAKERS; i++) {
@@ -1220,7 +1220,7 @@ describe("get-pending-settlements pagination", () => {
       let cursor: OptionalCV = Cl.none();
       const pageSizes: number[] = [];
       for (let guard = 0; guard < 10; guard++) {
-        const json = cvToJSON(getPendingSettlements(cursor));
+        const json = cvToJSON(getPendingWithdrawals(cursor));
         expect(json.success).toBe(true);
         const page = json.value.value as {
           rows: {
@@ -1302,9 +1302,9 @@ describe("get-pending-settlements pagination", () => {
       const lastId = BigInt(TOTAL);
       const lastStaker = stakers[TOTAL - 1]!;
       expect(acceptWithdrawal(lastId, 30n).result).toBeOk(Cl.bool(true));
-      mineUntilSettlementListable();
+      mineUntilWithdrawalListable();
 
-      const first = cvToJSON(getPendingSettlements()) as {
+      const first = cvToJSON(getPendingWithdrawals()) as {
         success: boolean;
         value: {
           value: {
@@ -1326,7 +1326,7 @@ describe("get-pending-settlements pagination", () => {
       expect(first.value.value.next.value).not.toBeNull();
 
       const nextKey = first.value.value.next.value!.value;
-      const second = getPendingSettlements(
+      const second = getPendingWithdrawals(
         Cl.some(
           Cl.tuple({
             staker: Cl.principal(nextKey.staker.value),
@@ -1335,7 +1335,7 @@ describe("get-pending-settlements pagination", () => {
           }),
         ),
       );
-      expect(second).toBeOk(pendingSettlementsPage([settlementRow(lastStaker, lastId)]));
+      expect(second).toBeOk(pendingWithdrawalsPage([withdrawalRow(lastStaker, lastId)]));
     },
     300_000,
   );
@@ -1502,7 +1502,7 @@ describe("claim schedule invariants", () => {
       mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
 
       expect(processRewardClaim(wallet1, wallet1, MOCK_SIGNER_MANAGER).result).toBeOk(Cl.none());
-      expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+      expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
       expect(getRegistration(wallet1, MOCK_SIGNER_MANAGER)).toBeSome(
         stxRegistration(2n, STX_FIRST_CLAIM_DIST + 2n),
       );
@@ -1648,9 +1648,9 @@ describe("reentrancy from settle-accepted-withdrawal", () => {
       ).result,
     ).toBeOk(Cl.bool(true));
     expect(getMaliciousLastReenterError()).toBeSome(Cl.uint(ERR_REENTRANT_CALL));
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([settlementRow(wallet2, 1n)]),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([withdrawalRow(wallet2, 1n)]),
     );
   });
 });
@@ -1675,11 +1675,11 @@ describe("withdrawal-request ids that are not a live sBTC pending request", () =
       Cl.some(Cl.uint(1)),
     );
     acceptWithdrawal(1n, 30n);
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([
-        settlementRow(wallet1, 1n),
-        settlementRow(wallet3, 1n, MOCK_SIGNER_MANAGER),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([
+        withdrawalRow(wallet1, 1n),
+        withdrawalRow(wallet3, 1n, MOCK_SIGNER_MANAGER),
       ]),
     );
     expect(getRegistration(wallet3, MOCK_SIGNER_MANAGER)).toBeSome(
@@ -1692,9 +1692,9 @@ describe("withdrawal-request ids that are not a live sBTC pending request", () =
     acceptWithdrawal(1n, 30n);
     setMockClaimStakerResult(false, 1001n, 1000n, Cl.some(Cl.uint(1)));
     expect(processRewardClaim(wallet3, wallet3, MOCK_SIGNER_MANAGER).result).toBeOk(Cl.none());
-    mineUntilSettlementListable();
-    expect(getPendingSettlements()).toBeOk(
-      pendingSettlementsPage([settlementRow(wallet1, 1n)]),
+    mineUntilWithdrawalListable();
+    expect(getPendingWithdrawals()).toBeOk(
+      pendingWithdrawalsPage([withdrawalRow(wallet1, 1n)]),
     );
   });
 });
@@ -1727,7 +1727,7 @@ describe("batch settle SM error does not stick the reentrancy lock", () => {
         wallet2,
       ).result,
     ).toBeOk(Cl.uint(1));
-    expect(getPendingSettlements()).toBeOk(pendingSettlementsPage([]));
+    expect(getPendingWithdrawals()).toBeOk(pendingWithdrawalsPage([]));
 
     // Lock was cleared: the SM error was swallowed and the id pruned.
     expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeErr(

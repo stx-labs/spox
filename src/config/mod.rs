@@ -64,7 +64,7 @@ pub struct Settings {
     /// Registry smart contract address
     #[serde(default, deserialize_with = "contract_deserializer_option")]
     pub registry_contract: Option<QualifiedContractIdentifier>,
-    /// Reward-claim / settlement config.
+    /// Reward-claim registry config.
     ///
     /// Presence of this stanza enables the reward-claim process. Requires
     /// [`Settings::stacks`] as well.

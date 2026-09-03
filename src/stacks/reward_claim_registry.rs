@@ -9,8 +9,12 @@ use clarity::types::chainstate::StacksBlockId;
 use clarity::vm::ClarityName;
 use clarity::vm::ContractName;
 use clarity::vm::Value as ClarityValue;
+use clarity::vm::types::CallableData;
+use clarity::vm::types::ListData;
+use clarity::vm::types::ListTypeData;
 use clarity::vm::types::PrincipalData;
 use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::types::SequenceData;
 use clarity::vm::types::TupleData;
 use clarity::vm::types::TupleTypeSignature;
 use clarity::vm::types::TypeSignature;
@@ -18,11 +22,13 @@ use clarity::vm::types::TypeSignature;
 use crate::error::Error;
 use crate::stacks::clarity::ClarityTuple;
 use crate::stacks::node::StacksClient;
+use crate::stacks::transaction::IntoContractCall;
+use crate::stacks::transaction::make_trait_identifier;
 
 /// Maximum list length for registry batch contract calls.
 ///
 /// Used by both `process-reward-claims` (stakers) and
-/// `settle-pending-withdrawals` (settlement items).
+/// `settle-pending-withdrawals` (withdrawal items).
 pub const MAX_STAKERS_LENGTH: usize = 100;
 
 /// Type signature for list elements of settle-pending-withdrawals items.
@@ -31,7 +37,7 @@ pub const MAX_STAKERS_LENGTH: usize = 100;
 /// depth exceeds 32, or the max would-be size exceeds 1 MiB. Ours are
 /// non-empty with a max depth less than 3, and a max would-be size less
 /// than 500 bytes. We also exercised this code in the contract-call tests.
-pub static TUPLE_SETTLEMENT_ITEM_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
+static TUPLE_WITHDRAWAL_ITEM_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
     TupleTypeSignature::try_from(BTreeMap::from([
         (ClarityName::from("staker"), TypeSignature::PrincipalType),
         (ClarityName::from("request-id"), TypeSignature::UIntType),
@@ -39,11 +45,11 @@ pub static TUPLE_SETTLEMENT_ITEM_SIGNATURE: LazyLock<TupleTypeSignature> = LazyL
     .unwrap()
 });
 
-/// Type signature for settlement cursors.
+/// Type signature for withdrawal cursors.
 ///
 /// This `TupleTypeSignature::try_from` has the same caveats mentioned in
-/// the docstring for [`TUPLE_SETTLEMENT_ITEM_SIGNATURE`].
-static TUPLE_SETTLEMENT_KEY_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
+/// the docstring for [`TUPLE_WITHDRAWAL_ITEM_SIGNATURE`].
+static TUPLE_WITHDRAWAL_KEY_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
     TupleTypeSignature::try_from(BTreeMap::from([
         (ClarityName::from("staker"), TypeSignature::PrincipalType),
         (
@@ -53,6 +59,27 @@ static TUPLE_SETTLEMENT_KEY_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::
         (ClarityName::from("request-id"), TypeSignature::UIntType),
     ]))
     .unwrap()
+});
+
+/// The type signature for the list of 100 stakers.
+///
+/// ListTypeData::new_list only returns an Err when max size of the type
+/// could be greater than 1 MiB, or if the type depth is greater than 32.
+/// Our type depth is 1 and the max size is 148 * 100 + 6 bytes, well under
+/// 1 MiB. We also have a test that exercises this path so we know that
+/// this won't panic in production.
+static LIST_PRINCIPALS_SIGNATURE: LazyLock<ListTypeData> = LazyLock::new(|| {
+    ListTypeData::new_list(TypeSignature::PrincipalType, MAX_STAKERS_LENGTH as u32).unwrap()
+});
+
+/// The type signature for the list of 100 `{staker, request-id}` items.
+///
+/// Same size bounds as [`LIST_PRINCIPALS_SIGNATURE`]: depth is small and the
+/// max serialized size is well under 1 MiB. Exercised by the dummy
+/// `WithdrawalsBatch` contract-call test.
+static LIST_WITHDRAWAL_ITEMS_SIGNATURE: LazyLock<ListTypeData> = LazyLock::new(|| {
+    let entry_type = TUPLE_WITHDRAWAL_ITEM_SIGNATURE.clone().into();
+    ListTypeData::new_list(entry_type, MAX_STAKERS_LENGTH as u32).unwrap()
 });
 
 /// Key identifying a registration in the reward claim registry.
@@ -102,10 +129,10 @@ pub struct PendingClaimsPage {
 
 /// Key identifying a pending withdrawal in the reward claim registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettlementKey(TupleData);
+pub struct WithdrawalKey(TupleData);
 
-impl SettlementKey {
-    /// Build a settlement cursor tuple from its fields.
+impl WithdrawalKey {
+    /// Build a withdrawal cursor tuple from its fields.
     pub fn new(staker: PrincipalData, signer_manager: PrincipalData, request_id: u128) -> Self {
         let data_map = BTreeMap::from([
             (ClarityName::from("staker"), ClarityValue::Principal(staker)),
@@ -118,7 +145,7 @@ impl SettlementKey {
                 ClarityValue::UInt(request_id),
             ),
         ]);
-        let type_signature = TUPLE_SETTLEMENT_KEY_SIGNATURE.clone();
+        let type_signature = TUPLE_WITHDRAWAL_KEY_SIGNATURE.clone();
         Self(TupleData { type_signature, data_map })
     }
 
@@ -131,10 +158,10 @@ impl SettlementKey {
 /// This type holds a list element for the items argument for a
 /// `settle-pending-withdrawals` contract call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettlementItem(TupleData);
+pub struct WithdrawalItem(TupleData);
 
-impl SettlementItem {
-    /// Build a settlement item from its fields.
+impl WithdrawalItem {
+    /// Build a withdrawal item from its fields.
     pub fn new(staker: PrincipalData, request_id: u128) -> Self {
         let data_map = BTreeMap::from([
             (ClarityName::from("staker"), ClarityValue::Principal(staker)),
@@ -143,7 +170,7 @@ impl SettlementItem {
                 ClarityValue::UInt(request_id),
             ),
         ]);
-        let type_signature = TUPLE_SETTLEMENT_ITEM_SIGNATURE.clone();
+        let type_signature = TUPLE_WITHDRAWAL_ITEM_SIGNATURE.clone();
         Self(TupleData { type_signature, data_map })
     }
 
@@ -156,7 +183,7 @@ impl SettlementItem {
     pub fn staker(&self) -> &PrincipalData {
         match self.0.get("staker") {
             Ok(ClarityValue::Principal(staker)) => staker,
-            _ => unreachable!("settlement item always has a principal staker"),
+            _ => unreachable!("withdrawal item always has a principal staker"),
         }
     }
 
@@ -164,40 +191,40 @@ impl SettlementItem {
     pub fn request_id(&self) -> u128 {
         match self.0.get("request-id") {
             Ok(ClarityValue::UInt(request_id)) => *request_id,
-            _ => unreachable!("settlement item always has a uint request-id"),
+            _ => unreachable!("withdrawal item always has a uint request-id"),
         }
     }
 }
 
-/// A single pending settlement row from `get-pending-settlements`.
+/// A single pending withdrawal row from `get-pending-withdrawals`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingSettlement {
+pub struct PendingWithdrawal {
     /// The signer-manager principal for this pending withdrawal.
     pub signer_manager: QualifiedContractIdentifier,
     /// Prebuilt `{staker, request-id}` for `settle-pending-withdrawals`.
-    pub item: SettlementItem,
+    pub item: WithdrawalItem,
 }
 
-impl PendingSettlement {
-    /// Settlement key for this row (for tests / cursors derived from a row).
-    pub fn settlement_key(&self) -> SettlementKey {
+impl PendingWithdrawal {
+    /// Withdrawal key for this row (for tests / cursors derived from a row).
+    pub fn withdrawal_key(&self) -> WithdrawalKey {
         let staker = self.item.staker().clone();
         let signer_manager = PrincipalData::Contract(self.signer_manager.clone());
-        SettlementKey::new(staker, signer_manager, self.item.request_id())
+        WithdrawalKey::new(staker, signer_manager, self.item.request_id())
     }
 }
 
-/// One page from `get-pending-settlements`.
+/// One page from `get-pending-withdrawals`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingSettlementsPage {
-    /// Pending settlement rows found during this bounded walk.
-    pub settlements: Vec<PendingSettlement>,
-    /// Cursor to pass to the next `get_pending_settlements` call.
+pub struct PendingWithdrawalsPage {
+    /// Pending withdrawal rows found during this bounded walk.
+    pub withdrawals: Vec<PendingWithdrawal>,
+    /// Cursor to pass to the next `get_pending_withdrawals` call.
     ///
     /// `None` means the walk reached the tail of the pending-withdrawal
-    /// list. `Some` is the last visited settlement key, which may not be
+    /// list. `Some` is the last visited withdrawal key, which may not be
     /// a settleable row itself.
-    pub next: Option<SettlementKey>,
+    pub next: Option<WithdrawalKey>,
 }
 
 /// Arguments for one `process-reward-claims` contract call.
@@ -234,15 +261,33 @@ impl RewardClaimsBatch {
     pub fn num_stakers(&self) -> usize {
         self.stakers.len()
     }
+}
 
-    /// The stakers to claim for in this call.
-    pub fn stakers(self) -> Vec<PrincipalData> {
-        self.stakers
-    }
-
-    /// The address that deployed the rewards claim registry.
-    pub fn deployer(&self) -> &StacksAddress {
+impl IntoContractCall for RewardClaimsBatch {
+    /// The name of the clarity smart contract that relates to this struct.
+    const CONTRACT_NAME: &'static str = "reward-claim-registry";
+    /// The specific function name that relates to this struct.
+    const FUNCTION_NAME: &'static str = "process-reward-claims";
+    /// The stacks address that deployed the contract.
+    fn deployer_address(&self) -> &StacksAddress {
         &self.deployer
+    }
+    /// The arguments to the clarity function.
+    fn into_contract_args(self) -> Vec<ClarityValue> {
+        let callable = CallableData {
+            contract_identifier: self.signer_manager,
+            trait_identifier: Some(make_trait_identifier(self.deployer)),
+        };
+        let stakers = self.stakers.into_iter().map(ClarityValue::Principal);
+        let stakers = ListData {
+            data: stakers.collect(),
+            type_signature: LIST_PRINCIPALS_SIGNATURE.clone(),
+        };
+
+        vec![
+            ClarityValue::CallableContract(callable),
+            ClarityValue::Sequence(SequenceData::List(stakers)),
+        ]
     }
 }
 
@@ -251,25 +296,23 @@ impl RewardClaimsBatch {
 /// All [`Self::items`] share [`Self::signer_manager`], and the list length
 /// is at most [`MAX_STAKERS_LENGTH`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettlementsBatch {
+pub struct WithdrawalsBatch {
     /// Signer-manager trait principal passed to `settle-pending-withdrawals`.
     signer_manager: QualifiedContractIdentifier,
-    /// Settlement items to settle in this call (1..=100).
-    items: Vec<SettlementItem>,
+    /// Withdrawal items to settle in this call (1..=100).
+    items: Vec<WithdrawalItem>,
     /// The address that deployed the rewards claim registry.
     deployer: StacksAddress,
 }
 
-impl SettlementsBatch {
-    /// Create a new dummy settlements batch.
+impl WithdrawalsBatch {
+    /// Create a new dummy withdrawals batch.
     #[cfg(test)]
     pub fn dummy() -> Self {
+        let principal = PrincipalData::from(StacksAddress::burn_address(false));
         Self {
             signer_manager: QualifiedContractIdentifier::transient(),
-            items: vec![SettlementItem::new(
-                PrincipalData::from(StacksAddress::burn_address(false)),
-                1,
-            )],
+            items: vec![WithdrawalItem::new(principal, 1)],
             deployer: StacksAddress::burn_address(false),
         }
     }
@@ -278,15 +321,35 @@ impl SettlementsBatch {
     pub fn signer_manager(&self) -> &QualifiedContractIdentifier {
         &self.signer_manager
     }
+}
 
-    /// The settlement items to settle in this call.
-    pub fn into_items(self) -> std::vec::IntoIter<SettlementItem> {
-        self.items.into_iter()
-    }
-
-    /// The address that deployed the rewards claim registry.
-    pub fn deployer(&self) -> &StacksAddress {
+impl IntoContractCall for WithdrawalsBatch {
+    /// The name of the clarity smart contract that relates to this struct.
+    const CONTRACT_NAME: &'static str = "reward-claim-registry";
+    /// The specific function name that relates to this struct.
+    const FUNCTION_NAME: &'static str = "settle-pending-withdrawals";
+    /// The stacks address that deployed the contract.
+    fn deployer_address(&self) -> &StacksAddress {
         &self.deployer
+    }
+    /// The arguments to the clarity function.
+    fn into_contract_args(self) -> Vec<ClarityValue> {
+        let callable = CallableData {
+            contract_identifier: self.signer_manager,
+            trait_identifier: Some(make_trait_identifier(self.deployer)),
+        };
+        let data = self
+            .items
+            .into_iter()
+            .map(|item| ClarityValue::Tuple(item.into_tuple()))
+            .collect::<Vec<_>>();
+
+        let type_signature = LIST_WITHDRAWAL_ITEMS_SIGNATURE.clone();
+
+        vec![
+            ClarityValue::CallableContract(callable),
+            ClarityValue::Sequence(SequenceData::List(ListData { data, type_signature })),
+        ]
     }
 }
 
@@ -396,18 +459,18 @@ impl RewardClaimRegistry {
         Ok(batch_claims(claims, &self.deployer))
     }
 
-    /// Fetch a page of pending settlements from the registry.
+    /// Fetch a page of pending withdrawals from the registry.
     ///
     /// Pass `None` for `cursor` to start at the head of the pending-
     /// withdrawal linked list. To paginate, pass
-    /// [`PendingSettlementsPage::next`] from the previous page.
+    /// [`PendingWithdrawalsPage::next`] from the previous page.
     /// `next == None` means the walk reached the tail; an empty
-    /// `settlements` list alone does not.
-    async fn get_pending_settlements(
+    /// `withdrawals` list alone does not.
+    async fn get_pending_withdrawals(
         &self,
-        cursor: Option<SettlementKey>,
+        cursor: Option<WithdrawalKey>,
         chain_tip: Option<&StacksBlockId>,
-    ) -> Result<PendingSettlementsPage, Error> {
+    ) -> Result<PendingWithdrawalsPage, Error> {
         let cursor_arg = match cursor {
             Some(key) => ClarityValue::some(ClarityValue::Tuple(key.into_tuple()))
                 .map_err(|error| Error::ClarityTuple(Box::new(error)))?,
@@ -419,7 +482,7 @@ impl RewardClaimRegistry {
             .call_read(
                 &self.deployer,
                 &self.contract_name,
-                &ClarityName::from("get-pending-settlements"),
+                &ClarityName::from("get-pending-withdrawals"),
                 &self.deployer,
                 &[cursor_arg],
                 chain_tip,
@@ -430,23 +493,23 @@ impl RewardClaimRegistry {
             return Err(Error::InvalidStacksResponse("expected a response"));
         };
 
-        PendingSettlementsPage::try_from(*response.data)
+        PendingWithdrawalsPage::try_from(*response.data)
     }
 
-    /// Fetch every pending settlement by paging through
-    /// `get-pending-settlements`.
+    /// Fetch every pending withdrawal by paging through
+    /// `get-pending-withdrawals`.
     ///
     /// Continues while the page's `next` cursor is `Some`.
-    async fn get_all_pending_settlements(&self) -> Result<Vec<PendingSettlement>, Error> {
+    async fn get_all_pending_withdrawals(&self) -> Result<Vec<PendingWithdrawal>, Error> {
         let mut all = Vec::new();
-        let mut cursor: Option<SettlementKey> = None;
+        let mut cursor: Option<WithdrawalKey> = None;
 
         let tip = self.client.get_node_info().await?.chain_tip();
         let chain_tip = Some(&tip);
 
         loop {
-            let page = self.get_pending_settlements(cursor, chain_tip).await?;
-            all.extend(page.settlements);
+            let page = self.get_pending_withdrawals(cursor, chain_tip).await?;
+            all.extend(page.withdrawals);
             match page.next {
                 Some(next) => cursor = Some(next),
                 None => break,
@@ -456,11 +519,11 @@ impl RewardClaimRegistry {
         Ok(all)
     }
 
-    /// Get all pending settlements, batched by signer manager, with chunks
+    /// Get all pending withdrawals, batched by signer manager, with chunks
     /// of at most [`MAX_STAKERS_LENGTH`] items per batch.
-    pub async fn get_pending_settlement_batches(&self) -> Result<Vec<SettlementsBatch>, Error> {
-        let settlements = self.get_all_pending_settlements().await?;
-        Ok(batch_settlements(settlements, &self.deployer))
+    pub async fn get_pending_withdrawal_batches(&self) -> Result<Vec<WithdrawalsBatch>, Error> {
+        let withdrawals = self.get_all_pending_withdrawals().await?;
+        Ok(batch_withdrawals(withdrawals, &self.deployer))
     }
 }
 
@@ -491,27 +554,27 @@ fn batch_claims(claims: Vec<PendingClaim>, deployer: &StacksAddress) -> Vec<Rewa
     batches
 }
 
-/// Group pending settlements by signer-manager and split into contract-call
+/// Group pending withdrawals by signer-manager and split into contract-call
 /// batches.
 ///
 /// Each batch has at most [`MAX_STAKERS_LENGTH`] items.
-fn batch_settlements(
-    settlements: Vec<PendingSettlement>,
+fn batch_withdrawals(
+    withdrawals: Vec<PendingWithdrawal>,
     deployer: &StacksAddress,
-) -> Vec<SettlementsBatch> {
-    let mut groups: HashMap<QualifiedContractIdentifier, Vec<SettlementItem>> = HashMap::new();
+) -> Vec<WithdrawalsBatch> {
+    let mut groups: HashMap<QualifiedContractIdentifier, Vec<WithdrawalItem>> = HashMap::new();
 
-    for settlement in settlements {
+    for withdrawal in withdrawals {
         groups
-            .entry(settlement.signer_manager)
+            .entry(withdrawal.signer_manager)
             .or_default()
-            .push(settlement.item);
+            .push(withdrawal.item);
     }
 
     let mut batches = Vec::new();
     for (signer_manager, items) in groups {
         for chunk in items.chunks(MAX_STAKERS_LENGTH) {
-            batches.push(SettlementsBatch {
+            batches.push(WithdrawalsBatch {
                 signer_manager: signer_manager.clone(),
                 items: chunk.to_vec(),
                 deployer: deployer.clone(),
@@ -586,7 +649,7 @@ impl TryFrom<ClarityValue> for PendingClaimsPage {
     }
 }
 
-impl TryFrom<ClarityValue> for SettlementKey {
+impl TryFrom<ClarityValue> for WithdrawalKey {
     type Error = Error;
 
     fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
@@ -596,11 +659,11 @@ impl TryFrom<ClarityValue> for SettlementKey {
         let signer_manager = clarity_map.remove_principal("signer-manager")?;
         let request_id = clarity_map.remove_uint("request-id")?;
 
-        Ok(SettlementKey::new(staker, signer_manager, request_id))
+        Ok(WithdrawalKey::new(staker, signer_manager, request_id))
     }
 }
 
-impl TryFrom<ClarityValue> for PendingSettlement {
+impl TryFrom<ClarityValue> for PendingWithdrawal {
     type Error = Error;
 
     fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
@@ -617,31 +680,31 @@ impl TryFrom<ClarityValue> for PendingSettlement {
         let staker = clarity_map.remove_principal("staker")?;
         let request_id = clarity_map.remove_uint("request-id")?;
 
-        Ok(PendingSettlement {
+        Ok(PendingWithdrawal {
             signer_manager,
-            item: SettlementItem::new(staker, request_id),
+            item: WithdrawalItem::new(staker, request_id),
         })
     }
 }
 
-impl TryFrom<ClarityValue> for PendingSettlementsPage {
+impl TryFrom<ClarityValue> for PendingWithdrawalsPage {
     type Error = Error;
 
     fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
         let mut clarity_map = ClarityTuple::try_from(value)?;
 
-        let settlements = clarity_map
+        let withdrawals = clarity_map
             .remove_list("rows")?
             .into_iter()
-            .map(PendingSettlement::try_from)
+            .map(PendingWithdrawal::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         let next = clarity_map
             .remove_option("next")?
-            .map(SettlementKey::try_from)
+            .map(WithdrawalKey::try_from)
             .transpose()?;
 
-        Ok(PendingSettlementsPage { settlements, next })
+        Ok(PendingWithdrawalsPage { withdrawals, next })
     }
 }
 
@@ -697,8 +760,8 @@ mod tests {
         }
     }
 
-    impl From<&PendingSettlement> for ClarityValue {
-        fn from(value: &PendingSettlement) -> Self {
+    impl From<&PendingWithdrawal> for ClarityValue {
+        fn from(value: &PendingWithdrawal) -> Self {
             let tuple_entries = vec![
                 (
                     ClarityName::from("signer-manager"),
@@ -717,8 +780,8 @@ mod tests {
         }
     }
 
-    impl From<&SettlementKey> for ClarityValue {
-        fn from(value: &SettlementKey) -> Self {
+    impl From<&WithdrawalKey> for ClarityValue {
+        fn from(value: &WithdrawalKey) -> Self {
             ClarityValue::Tuple(value.clone().into_tuple())
         }
     }
@@ -742,11 +805,11 @@ mod tests {
         ClarityValue::okay(page).unwrap()
     }
 
-    fn ok_settlements_page(
-        settlements: &[PendingSettlement],
-        next: Option<&SettlementKey>,
+    fn ok_withdrawals_page(
+        withdrawals: &[PendingWithdrawal],
+        next: Option<&WithdrawalKey>,
     ) -> ClarityValue {
-        let rows: Vec<ClarityValue> = settlements.iter().map(ClarityValue::from).collect();
+        let rows: Vec<ClarityValue> = withdrawals.iter().map(ClarityValue::from).collect();
         let next_value = match next {
             Some(key) => ClarityValue::some(ClarityValue::from(key)).unwrap(),
             None => ClarityValue::none(),
@@ -1082,10 +1145,8 @@ mod tests {
             .find(|batch| batch.signer_manager() == &sm_b)
             .expect("batch for signer-manager B");
 
-        assert_eq!(batch_a.deployer(), &StacksAddress::burn_address(false));
-        assert_eq!(batch_b.deployer(), &StacksAddress::burn_address(false));
-        assert_eq!(batch_a.clone().stakers(), vec![staker1, staker3]);
-        assert_eq!(batch_b.clone().stakers(), vec![staker2]);
+        assert_eq!(batch_a.stakers, vec![staker1, staker3]);
+        assert_eq!(batch_b.stakers, vec![staker2]);
     }
 
     #[test]
@@ -1112,36 +1173,33 @@ mod tests {
         assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
         assert_eq!(batches[0].num_stakers(), MAX_STAKERS_LENGTH);
         assert_eq!(batches[1].num_stakers(), 1);
-        let batch0_stakers = batches[0].clone().stakers();
+        let batch0_stakers = batches[0].stakers.clone();
         assert_eq!(batch0_stakers[0], claims[0].staker);
         assert_eq!(
             batch0_stakers[MAX_STAKERS_LENGTH - 1],
             claims[MAX_STAKERS_LENGTH - 1].staker
         );
-        assert_eq!(
-            batches[1].clone().stakers()[0],
-            claims[MAX_STAKERS_LENGTH].staker
-        );
+        assert_eq!(batches[1].stakers[0], claims[MAX_STAKERS_LENGTH].staker);
     }
 
-    fn settlement(
+    fn withdrawal(
         signer_manager: &QualifiedContractIdentifier,
         staker: PrincipalData,
         request_id: u128,
-    ) -> PendingSettlement {
-        PendingSettlement {
+    ) -> PendingWithdrawal {
+        PendingWithdrawal {
             signer_manager: signer_manager.clone(),
-            item: SettlementItem::new(staker, request_id),
+            item: WithdrawalItem::new(staker, request_id),
         }
     }
 
     #[test]
-    fn batch_pending_settlements_empty() {
-        assert!(batch_settlements(vec![], &StacksAddress::burn_address(false)).is_empty());
+    fn batch_pending_withdrawals_empty() {
+        assert!(batch_withdrawals(vec![], &StacksAddress::burn_address(false)).is_empty());
     }
 
     #[test]
-    fn batch_pending_settlements_groups_by_signer_manager() {
+    fn batch_pending_withdrawals_groups_by_signer_manager() {
         let sm_a = QualifiedContractIdentifier::parse(
             "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
         )
@@ -1155,13 +1213,13 @@ mod tests {
         let staker3 =
             PrincipalData::parse("ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.staker-3").unwrap();
 
-        let settlements = vec![
-            settlement(&sm_a, staker1.clone(), 1),
-            settlement(&sm_b, staker2.clone(), 2),
-            settlement(&sm_a, staker3.clone(), 3),
+        let withdrawals = vec![
+            withdrawal(&sm_a, staker1.clone(), 1),
+            withdrawal(&sm_b, staker2.clone(), 2),
+            withdrawal(&sm_a, staker3.clone(), 3),
         ];
 
-        let batches = batch_settlements(settlements, &StacksAddress::burn_address(false));
+        let batches = batch_withdrawals(withdrawals, &StacksAddress::burn_address(false));
         assert_eq!(batches.len(), 2);
 
         let batch_a = batches
@@ -1173,29 +1231,27 @@ mod tests {
             .find(|batch| batch.signer_manager() == &sm_b)
             .expect("batch for signer-manager B");
 
-        let batch_a_items: Vec<_> = batch_a.clone().into_items().collect();
+        let batch_a_items: Vec<_> = batch_a.items.clone();
         assert_eq!(
             batch_a_items,
             vec![
-                SettlementItem::new(staker1, 1),
-                SettlementItem::new(staker3, 3)
+                WithdrawalItem::new(staker1, 1),
+                WithdrawalItem::new(staker3, 3)
             ]
         );
-        assert_eq!(batch_a.deployer(), &StacksAddress::burn_address(false));
-        assert_eq!(batch_b.deployer(), &StacksAddress::burn_address(false));
-        let batch_b_items: Vec<_> = batch_b.clone().into_items().collect();
-        assert_eq!(batch_b_items, vec![SettlementItem::new(staker2, 2)]);
+        let batch_b_items: Vec<_> = batch_b.items.clone();
+        assert_eq!(batch_b_items, vec![WithdrawalItem::new(staker2, 2)]);
     }
 
     #[test]
-    fn batch_pending_settlements_chunks_at_max_items() {
+    fn batch_pending_withdrawals_chunks_at_max_items() {
         let sm = QualifiedContractIdentifier::parse(
             "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
         )
         .unwrap();
-        let settlements: Vec<_> = (0..=MAX_STAKERS_LENGTH)
+        let withdrawals: Vec<_> = (0..=MAX_STAKERS_LENGTH)
             .map(|i| {
-                settlement(
+                withdrawal(
                     &sm,
                     PrincipalData::parse(&format!(
                         "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.s{i}"
@@ -1206,44 +1262,44 @@ mod tests {
             })
             .collect();
 
-        let batches = batch_settlements(settlements.clone(), &StacksAddress::burn_address(false));
+        let batches = batch_withdrawals(withdrawals.clone(), &StacksAddress::burn_address(false));
         assert_eq!(batches.len(), 2);
         assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
 
-        let batch0_items: Vec<_> = batches[0].clone().into_items().collect();
-        let batch1_items: Vec<_> = batches[1].clone().into_items().collect();
+        let batch0_items: Vec<_> = batches[0].items.clone();
+        let batch1_items: Vec<_> = batches[1].items.clone();
         assert_eq!(batch0_items.len(), MAX_STAKERS_LENGTH);
         assert_eq!(batch1_items.len(), 1);
-        assert_eq!(batch0_items[0], settlements[0].item);
+        assert_eq!(batch0_items[0], withdrawals[0].item);
         assert_eq!(
             batch0_items[MAX_STAKERS_LENGTH - 1],
-            settlements[MAX_STAKERS_LENGTH - 1].item
+            withdrawals[MAX_STAKERS_LENGTH - 1].item
         );
-        assert_eq!(batch1_items[0], settlements[MAX_STAKERS_LENGTH].item);
+        assert_eq!(batch1_items[0], withdrawals[MAX_STAKERS_LENGTH].item);
     }
 
     #[tokio::test]
-    async fn get_pending_settlements_works_without_cursor() {
+    async fn get_pending_withdrawals_works_without_cursor() {
         let staker = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
         let signer_manager = QualifiedContractIdentifier::parse(
             "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
         )
         .unwrap();
 
-        let settlement = PendingSettlement {
+        let withdrawal = PendingWithdrawal {
             signer_manager,
-            item: SettlementItem::new(staker, 7),
+            item: WithdrawalItem::new(staker, 7),
         };
-        let next = settlement.settlement_key();
+        let next = withdrawal.withdrawal_key();
 
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_settlements_page(&[settlement.clone()], Some(&next))
+            ok_withdrawals_page(&[withdrawal.clone()], Some(&next))
                 .serialize_to_hex()
                 .unwrap(),
         );
 
-        let path = "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip=latest";
+        let path = "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest";
         let mut stacks_node_server = mockito::Server::new_async().await;
         let mock = stacks_node_server
             .mock("POST", path)
@@ -1267,9 +1323,9 @@ mod tests {
             client,
         );
 
-        let result = registry.get_pending_settlements(None, None).await.unwrap();
-        let expected = PendingSettlementsPage {
-            settlements: vec![settlement],
+        let result = registry.get_pending_withdrawals(None, None).await.unwrap();
+        let expected = PendingWithdrawalsPage {
+            withdrawals: vec![withdrawal],
             next: Some(next),
         };
         assert_eq!(result, expected);
@@ -1277,19 +1333,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_pending_settlements_works_with_cursor() {
+    async fn get_pending_withdrawals_works_with_cursor() {
         let staker = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
         let signer_manager = QualifiedContractIdentifier::parse(
             "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
         )
         .unwrap();
 
-        let cursor = SettlementKey::new(staker, PrincipalData::Contract(signer_manager.clone()), 1);
+        let cursor = WithdrawalKey::new(staker, PrincipalData::Contract(signer_manager.clone()), 1);
 
         let staker2 = PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap();
-        let settlement = PendingSettlement {
+        let withdrawal = PendingWithdrawal {
             signer_manager,
-            item: SettlementItem::new(staker2, 99),
+            item: WithdrawalItem::new(staker2, 99),
         };
 
         let cursor_hex = ClarityValue::some(ClarityValue::from(&cursor))
@@ -1299,7 +1355,7 @@ mod tests {
 
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_settlements_page(&[settlement.clone()], None)
+            ok_withdrawals_page(&[withdrawal.clone()], None)
                 .serialize_to_hex()
                 .unwrap(),
         );
@@ -1308,7 +1364,7 @@ mod tests {
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip=latest",
+                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest",
             )
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "arguments": [cursor_hex]
@@ -1331,12 +1387,12 @@ mod tests {
         );
 
         let result = registry
-            .get_pending_settlements(Some(cursor), None)
+            .get_pending_withdrawals(Some(cursor), None)
             .await
             .unwrap();
 
-        let expected = PendingSettlementsPage {
-            settlements: vec![settlement],
+        let expected = PendingWithdrawalsPage {
+            withdrawals: vec![withdrawal],
             next: None,
         };
         assert_eq!(result, expected);
@@ -1344,17 +1400,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_pending_settlements_empty_page_at_tail() {
+    async fn get_pending_withdrawals_empty_page_at_tail() {
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_settlements_page(&[], None).serialize_to_hex().unwrap(),
+            ok_withdrawals_page(&[], None).serialize_to_hex().unwrap(),
         );
 
         let mut stacks_node_server = mockito::Server::new_async().await;
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip=latest",
+                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest",
             )
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -1373,10 +1429,10 @@ mod tests {
             client,
         );
 
-        let result = registry.get_pending_settlements(None, None).await.unwrap();
+        let result = registry.get_pending_withdrawals(None, None).await.unwrap();
 
-        let expected = PendingSettlementsPage {
-            settlements: vec![],
+        let expected = PendingWithdrawalsPage {
+            withdrawals: vec![],
             next: None,
         };
         assert_eq!(result, expected);
@@ -1384,21 +1440,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_all_pending_settlements_continues_on_empty_rows_with_next() {
+    async fn get_all_pending_withdrawals_continues_on_empty_rows_with_next() {
         let signer_manager = QualifiedContractIdentifier::parse(
             "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
         )
         .unwrap();
 
         // First page: ticks burned on non-settleable nodes, resume cursor only.
-        let skipped = SettlementKey::new(
+        let skipped = WithdrawalKey::new(
             PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap(),
             PrincipalData::Contract(signer_manager.clone()),
             3,
         );
-        let pending = PendingSettlement {
+        let pending = PendingWithdrawal {
             signer_manager: signer_manager.clone(),
-            item: SettlementItem::new(
+            item: WithdrawalItem::new(
                 PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
                 99,
             ),
@@ -1432,7 +1488,7 @@ mod tests {
             .create();
 
         let path = format!(
-            "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-settlements?tip={tip}"
+            "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip={tip}"
         );
 
         let empty_with_next = stacks_node_server
@@ -1444,7 +1500,7 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(format!(
                 r#"{{"okay": true, "result":"0x{}"}}"#,
-                ok_settlements_page(&[], Some(&skipped))
+                ok_withdrawals_page(&[], Some(&skipped))
                     .serialize_to_hex()
                     .unwrap(),
             ))
@@ -1460,7 +1516,7 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(format!(
                 r#"{{"okay": true, "result":"0x{}"}}"#,
-                ok_settlements_page(&[pending.clone()], None)
+                ok_withdrawals_page(&[pending.clone()], None)
                     .serialize_to_hex()
                     .unwrap(),
             ))
@@ -1478,7 +1534,7 @@ mod tests {
             client,
         );
 
-        let result = registry.get_all_pending_settlements().await.unwrap();
+        let result = registry.get_all_pending_withdrawals().await.unwrap();
 
         assert_eq!(result, vec![pending]);
         info_mock.assert();

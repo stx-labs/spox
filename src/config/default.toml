@@ -101,7 +101,7 @@ sbtc_deployer = "SN3R84XZYA63QS28932XQF3G1J8R9PC3W76P9CSQS"
 # !! ===========================================================================
 # !! Reward claims configuration
 # !! ---------------------------------------------------------------------------
-# !! Presence of this stanza enables the reward-claim / settlement process.
+# !! Presence of this stanza enables the reward-claim registry process.
 # !! Requires `[stacks]` as well.
 # !! ===========================================================================
 # [reward_claims]

@@ -1,8 +1,8 @@
-//! Tip-driven process that advances reward claims and settlements.
+//! Tip-driven process that advances reward claims and withdrawals.
 //!
 //! On each new Bitcoin chain tip the process:
 //! 1. Fetches pending claims and broadcasts `process-reward-claims` batches,
-//! 2. Fetches pending settlements and broadcasts `settle-pending-withdrawals`
+//! 2. Fetches pending withdrawals and broadcasts `settle-pending-withdrawals`
 //!    batches.
 //!
 //! Run via [`crate::dispatch::run_on_chain_tips`] alongside deposit
@@ -58,8 +58,8 @@ pub async fn process_reward_claims(mut rx: mpsc::Receiver<BlockRef>, context: Co
             tracing::warn!(%error, "error processing pending reward claims");
         }
 
-        if let Err(error) = process_pending_settlements(&context, &chain_tip).await {
-            tracing::warn!(%error, "error processing pending settlements");
+        if let Err(error) = process_pending_withdrawals(&context, &chain_tip).await {
+            tracing::warn!(%error, "error processing pending withdrawals");
         }
     }
 }
@@ -112,18 +112,18 @@ async fn process_claims(state: &RewardClaimState, chain_tip: &BlockRef) -> Resul
     Ok(())
 }
 
-/// The function that processes pending settlements.
+/// The function that processes pending withdrawals.
 ///
 /// # Notes
 ///
 /// This function works as follows:
-/// 1. Gets all pending settlements from the registry.
+/// 1. Gets all pending withdrawals from the registry.
 /// 2. Submits a settle-pending-withdrawals contract call for each batch of
-///    settlements, where a batch is a group of at most 100 stakers who are
+///    withdrawals, where a batch is a group of at most 100 stakers who are
 ///    associated with the same signer-manager.
-async fn process_pending_settlements(_: &Context, chain_tip: &BlockRef) -> Result<(), Error> {
-    // TODO(#40/#42): fetch pending settlements and submit settle-pending-withdrawals.
-    tracing::debug!(%chain_tip, "reward settlement processing not yet implemented");
+async fn process_pending_withdrawals(_: &Context, chain_tip: &BlockRef) -> Result<(), Error> {
+    // TODO(#40/#42): fetch pending withdrawals and submit settle-pending-withdrawals.
+    tracing::debug!(%chain_tip, "reward withdrawal processing not yet implemented");
     Ok(())
 }
 

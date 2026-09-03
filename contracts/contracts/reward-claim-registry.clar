@@ -2,9 +2,9 @@
 
 ;; The longest STX lock in PoX-5 is 96 reward cycles, which equals 192 distribution cycles
 (define-constant MAX_DISTRIBUTION_CYCLES u192)
-;; Minimum Bitcoin blocks after indexing before get-pending-settlements
+;; Minimum Bitcoin blocks after indexing before get-pending-withdrawals
 ;; will consult sbtc-registry. Settle itself is not gated on this.
-(define-constant SETTLEMENT_MIN_BURN_AGE u7)
+(define-constant WITHDRAWAL_MIN_BURN_AGE u7)
 
 ;; No registration for this staker and signer-manager combination
 (define-constant ERR_NOT_REGISTERED (err u600))
@@ -34,7 +34,7 @@
 (define-constant ERR_REENTRANT_CALL (err u612))
 
 ;; A (list 100 uint) whose only job is to bound the get-pending-claims /
-;; get-pending-settlements folds to at most 100 node visits per call. The
+;; get-pending-withdrawals folds to at most 100 node visits per call. The
 ;; element values are never read (the fold step ignores `tick`).
 ;; @format-ignore
 (define-constant PENDING_TICKS (list
@@ -308,7 +308,7 @@
 
 ;; --- Doubly-linked-list maintenance over pending-withdrawal-ll ---
 ;; Same shape as the registration list, one node per indexed withdrawal so
-;; get-pending-settlements can walk them directly.
+;; get-pending-withdrawals can walk them directly.
 
 ;; Append `key` at the tail of the pending-withdrawal list.
 ;;
@@ -1100,13 +1100,13 @@
 )
 
 ;; Returns true when this indexed withdrawal is old enough and sBTC has
-;; resolved it. Used only by get-pending-settlements.
+;; resolved it. Used only by get-pending-withdrawals.
 ;; #[allow(unchecked_data)]
 (define-private (withdrawal-ready-to-list
         (request-id uint)
         (stored-height uint)
     )
-    (if (< burn-block-height (+ stored-height SETTLEMENT_MIN_BURN_AGE))
+    (if (< burn-block-height (+ stored-height WITHDRAWAL_MIN_BURN_AGE))
         false
         (match (contract-call? 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry
             get-withdrawal-request request-id
@@ -1236,7 +1236,7 @@
     )
 )
 
-;; Fold step for get-pending-settlements.
+;; Fold step for get-pending-withdrawals.
 ;;
 ;; Visits one linked-list node, appends a row when the withdrawal is old
 ;; enough and sBTC has resolved it, records `last-visited`, and advances
@@ -1244,7 +1244,7 @@
 ;; accumulators rows field.
 ;;
 ;; #[allow(unchecked_data)]
-(define-private (pending-settlements-step
+(define-private (pending-withdrawals-step
         (tick_ uint)
         (acc {
             node: (optional {
@@ -1308,7 +1308,7 @@
 
 ;; List indexed L1 withdrawals that are ready to settle. Walks
 ;; pending-withdrawal-ll from cursor, or from the head when cursor is none.
-;; A row is emitted only when at least SETTLEMENT_MIN_BURN_AGE Bitcoin
+;; A row is emitted only when at least WITHDRAWAL_MIN_BURN_AGE Bitcoin
 ;; blocks have passed since insert and sbtc-registry status indicated that
 ;; it has been accepted or rejected. Use the returned `next` cursor: none
 ;; means the walk hit the tail; some key means pass that key as the next
@@ -1318,7 +1318,7 @@
 ;; Parameters:
 ;;
 ;;   cursor  use none to start at the head. When some, it indicates where
-;;           to resume looking for pending settlements. The settlement for
+;;           to resume looking for pending withdrawals. The withdrawal for
 ;;           this key is not included in the response.
 ;;
 ;; Returns:
@@ -1326,7 +1326,7 @@
 ;;   ok wrapping { rows, next }. Each row has staker, signer-manager, and
 ;;   request-id. `next` is none at the tail, or the last visited key when
 ;;   more nodes may remain.
-(define-read-only (get-pending-settlements (cursor (optional {
+(define-read-only (get-pending-withdrawals (cursor (optional {
     staker: principal,
     signer-manager: principal,
     request-id: uint,
@@ -1341,7 +1341,7 @@
                 )
                 (var-get pending-withdrawal-ll-head)
             ))
-            (walk (fold pending-settlements-step PENDING_TICKS {
+            (walk (fold pending-withdrawals-step PENDING_TICKS {
                 node: start,
                 last-visited: none,
                 rows: (list),
