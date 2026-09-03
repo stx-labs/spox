@@ -1,6 +1,8 @@
 //! Client for the on-chain reward claim registry.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use clarity::types::chainstate::StacksAddress;
 use clarity::types::chainstate::StacksBlockId;
@@ -10,13 +12,48 @@ use clarity::vm::Value as ClarityValue;
 use clarity::vm::types::PrincipalData;
 use clarity::vm::types::QualifiedContractIdentifier;
 use clarity::vm::types::TupleData;
+use clarity::vm::types::TupleTypeSignature;
+use clarity::vm::types::TypeSignature;
 
 use crate::error::Error;
 use crate::stacks::clarity::ClarityTuple;
 use crate::stacks::node::StacksClient;
 
-/// Maximum number of stakers accepted by `process-reward-claims` in one call.
+/// Maximum list length for registry batch contract calls.
+///
+/// Used by both `process-reward-claims` (stakers) and
+/// `settle-pending-withdrawals` (settlement items).
 pub const MAX_STAKERS_LENGTH: usize = 100;
+
+/// Type signature for list elements of settle-pending-withdrawals items.
+///
+/// This `TupleTypeSignature::try_from` only fails if the map is empty, the
+/// depth exceeds 32, or the max would-be size exceeds 1 MiB. Ours are
+/// non-empty with a max depth less than 3, and a max would-be size less
+/// than 500 bytes. We also exercised this code in the contract-call tests.
+pub static TUPLE_SETTLEMENT_ITEM_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
+    TupleTypeSignature::try_from(BTreeMap::from([
+        (ClarityName::from("staker"), TypeSignature::PrincipalType),
+        (ClarityName::from("request-id"), TypeSignature::UIntType),
+    ]))
+    .unwrap()
+});
+
+/// Type signature for settlement cursors.
+///
+/// This `TupleTypeSignature::try_from` has the same caveats mentioned in
+/// the docstring for [`TUPLE_SETTLEMENT_ITEM_SIGNATURE`].
+static TUPLE_SETTLEMENT_KEY_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
+    TupleTypeSignature::try_from(BTreeMap::from([
+        (ClarityName::from("staker"), TypeSignature::PrincipalType),
+        (
+            ClarityName::from("signer-manager"),
+            TypeSignature::PrincipalType,
+        ),
+        (ClarityName::from("request-id"), TypeSignature::UIntType),
+    ]))
+    .unwrap()
+});
 
 /// Key identifying a registration in the reward claim registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,13 +102,71 @@ pub struct PendingClaimsPage {
 
 /// Key identifying a pending withdrawal in the reward claim registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettlementKey {
-    /// The staker principal on the pending withdrawal.
-    pub staker: PrincipalData,
-    /// The signer-manager principal on the pending withdrawal.
-    pub signer_manager: PrincipalData,
-    /// The sBTC withdrawal request ID.
-    pub request_id: u128,
+pub struct SettlementKey(TupleData);
+
+impl SettlementKey {
+    /// Build a settlement cursor tuple from its fields.
+    pub fn new(staker: PrincipalData, signer_manager: PrincipalData, request_id: u128) -> Self {
+        let data_map = BTreeMap::from([
+            (ClarityName::from("staker"), ClarityValue::Principal(staker)),
+            (
+                ClarityName::from("signer-manager"),
+                ClarityValue::Principal(signer_manager),
+            ),
+            (
+                ClarityName::from("request-id"),
+                ClarityValue::UInt(request_id),
+            ),
+        ]);
+        let type_signature = TUPLE_SETTLEMENT_KEY_SIGNATURE.clone();
+        Self(TupleData { type_signature, data_map })
+    }
+
+    /// The Clarity tuple for this cursor.
+    pub fn into_tuple(self) -> TupleData {
+        self.0
+    }
+}
+
+/// This type holds a list element for the items argument for a
+/// `settle-pending-withdrawals` contract call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementItem(TupleData);
+
+impl SettlementItem {
+    /// Build a settlement item from its fields.
+    pub fn new(staker: PrincipalData, request_id: u128) -> Self {
+        let data_map = BTreeMap::from([
+            (ClarityName::from("staker"), ClarityValue::Principal(staker)),
+            (
+                ClarityName::from("request-id"),
+                ClarityValue::UInt(request_id),
+            ),
+        ]);
+        let type_signature = TUPLE_SETTLEMENT_ITEM_SIGNATURE.clone();
+        Self(TupleData { type_signature, data_map })
+    }
+
+    /// The Clarity tuple for this item.
+    pub fn into_tuple(self) -> TupleData {
+        self.0
+    }
+
+    /// The staker principal on this item.
+    pub fn staker(&self) -> &PrincipalData {
+        match self.0.get("staker") {
+            Ok(ClarityValue::Principal(staker)) => staker,
+            _ => unreachable!("settlement item always has a principal staker"),
+        }
+    }
+
+    /// The sBTC withdrawal request ID on this item.
+    pub fn request_id(&self) -> u128 {
+        match self.0.get("request-id") {
+            Ok(ClarityValue::UInt(request_id)) => *request_id,
+            _ => unreachable!("settlement item always has a uint request-id"),
+        }
+    }
 }
 
 /// A single pending settlement row from `get-pending-settlements`.
@@ -79,20 +174,16 @@ pub struct SettlementKey {
 pub struct PendingSettlement {
     /// The signer-manager principal for this pending withdrawal.
     pub signer_manager: QualifiedContractIdentifier,
-    /// The staker principal for this pending withdrawal.
-    pub staker: PrincipalData,
-    /// The sBTC withdrawal request ID to settle.
-    pub request_id: u128,
+    /// Prebuilt `{staker, request-id}` for `settle-pending-withdrawals`.
+    pub item: SettlementItem,
 }
 
 impl PendingSettlement {
-    /// Settlement key for this row.
+    /// Settlement key for this row (for tests / cursors derived from a row).
     pub fn settlement_key(&self) -> SettlementKey {
-        SettlementKey {
-            staker: self.staker.clone(),
-            signer_manager: PrincipalData::Contract(self.signer_manager.clone()),
-            request_id: self.request_id,
-        }
+        let staker = self.item.staker().clone();
+        let signer_manager = PrincipalData::Contract(self.signer_manager.clone());
+        SettlementKey::new(staker, signer_manager, self.item.request_id())
     }
 }
 
@@ -139,9 +230,58 @@ impl RewardClaimsBatch {
         &self.signer_manager
     }
 
+    /// The number of stakers to claim for in this call.
+    pub fn num_stakers(&self) -> usize {
+        self.stakers.len()
+    }
+
     /// The stakers to claim for in this call.
-    pub fn stakers(&self) -> &[PrincipalData] {
-        &self.stakers
+    pub fn stakers(self) -> Vec<PrincipalData> {
+        self.stakers
+    }
+
+    /// The address that deployed the rewards claim registry.
+    pub fn deployer(&self) -> &StacksAddress {
+        &self.deployer
+    }
+}
+
+/// Arguments for one `settle-pending-withdrawals` contract call.
+///
+/// All [`Self::items`] share [`Self::signer_manager`], and the list length
+/// is at most [`MAX_STAKERS_LENGTH`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementsBatch {
+    /// Signer-manager trait principal passed to `settle-pending-withdrawals`.
+    signer_manager: QualifiedContractIdentifier,
+    /// Settlement items to settle in this call (1..=100).
+    items: Vec<SettlementItem>,
+    /// The address that deployed the rewards claim registry.
+    deployer: StacksAddress,
+}
+
+impl SettlementsBatch {
+    /// Create a new dummy settlements batch.
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        Self {
+            signer_manager: QualifiedContractIdentifier::transient(),
+            items: vec![SettlementItem::new(
+                PrincipalData::from(StacksAddress::burn_address(false)),
+                1,
+            )],
+            deployer: StacksAddress::burn_address(false),
+        }
+    }
+
+    /// The signer-manager principal passed to `settle-pending-withdrawals`.
+    pub fn signer_manager(&self) -> &QualifiedContractIdentifier {
+        &self.signer_manager
+    }
+
+    /// The settlement items to settle in this call.
+    pub fn into_items(self) -> std::vec::IntoIter<SettlementItem> {
+        self.items.into_iter()
     }
 
     /// The address that deployed the rewards claim registry.
@@ -201,10 +341,9 @@ impl RewardClaimRegistry {
                         ClarityValue::Principal(key.signer_manager.clone()),
                     ),
                 ])
-                .map_err(|_| Error::InvalidStacksResponse("could not construct cursor tuple"))?;
-                ClarityValue::some(ClarityValue::Tuple(tuple)).map_err(|_| {
-                    Error::InvalidStacksResponse("could not construct cursor option")
-                })?
+                .map_err(|error| Error::ClarityTuple(Box::new(error)))?;
+                ClarityValue::some(ClarityValue::Tuple(tuple))
+                    .map_err(|error| Error::ClarityTuple(Box::new(error)))?
             }
             None => ClarityValue::none(),
         };
@@ -266,30 +405,12 @@ impl RewardClaimRegistry {
     /// `settlements` list alone does not.
     async fn get_pending_settlements(
         &self,
-        cursor: Option<&SettlementKey>,
+        cursor: Option<SettlementKey>,
         chain_tip: Option<&StacksBlockId>,
     ) -> Result<PendingSettlementsPage, Error> {
         let cursor_arg = match cursor {
-            Some(key) => {
-                let tuple = TupleData::from_data(vec![
-                    (
-                        ClarityName::from("staker"),
-                        ClarityValue::Principal(key.staker.clone()),
-                    ),
-                    (
-                        ClarityName::from("signer-manager"),
-                        ClarityValue::Principal(key.signer_manager.clone()),
-                    ),
-                    (
-                        ClarityName::from("request-id"),
-                        ClarityValue::UInt(key.request_id),
-                    ),
-                ])
-                .map_err(|_| Error::InvalidStacksResponse("could not construct cursor tuple"))?;
-                ClarityValue::some(ClarityValue::Tuple(tuple)).map_err(|_| {
-                    Error::InvalidStacksResponse("could not construct cursor option")
-                })?
-            }
+            Some(key) => ClarityValue::some(ClarityValue::Tuple(key.into_tuple()))
+                .map_err(|error| Error::ClarityTuple(Box::new(error)))?,
             None => ClarityValue::none(),
         };
 
@@ -316,7 +437,7 @@ impl RewardClaimRegistry {
     /// `get-pending-settlements`.
     ///
     /// Continues while the page's `next` cursor is `Some`.
-    pub async fn get_all_pending_settlements(&self) -> Result<Vec<PendingSettlement>, Error> {
+    async fn get_all_pending_settlements(&self) -> Result<Vec<PendingSettlement>, Error> {
         let mut all = Vec::new();
         let mut cursor: Option<SettlementKey> = None;
 
@@ -324,9 +445,7 @@ impl RewardClaimRegistry {
         let chain_tip = Some(&tip);
 
         loop {
-            let page = self
-                .get_pending_settlements(cursor.as_ref(), chain_tip)
-                .await?;
+            let page = self.get_pending_settlements(cursor, chain_tip).await?;
             all.extend(page.settlements);
             match page.next {
                 Some(next) => cursor = Some(next),
@@ -335,6 +454,13 @@ impl RewardClaimRegistry {
         }
 
         Ok(all)
+    }
+
+    /// Get all pending settlements, batched by signer manager, with chunks
+    /// of at most [`MAX_STAKERS_LENGTH`] items per batch.
+    pub async fn get_pending_settlement_batches(&self) -> Result<Vec<SettlementsBatch>, Error> {
+        let settlements = self.get_all_pending_settlements().await?;
+        Ok(batch_settlements(settlements, &self.deployer))
     }
 }
 
@@ -357,6 +483,37 @@ fn batch_claims(claims: Vec<PendingClaim>, deployer: &StacksAddress) -> Vec<Rewa
             batches.push(RewardClaimsBatch {
                 signer_manager: signer_manager.clone(),
                 stakers: chunk.to_vec(),
+                deployer: deployer.clone(),
+            });
+        }
+    }
+
+    batches
+}
+
+/// Group pending settlements by signer-manager and split into contract-call
+/// batches.
+///
+/// Each batch has at most [`MAX_STAKERS_LENGTH`] items.
+fn batch_settlements(
+    settlements: Vec<PendingSettlement>,
+    deployer: &StacksAddress,
+) -> Vec<SettlementsBatch> {
+    let mut groups: HashMap<QualifiedContractIdentifier, Vec<SettlementItem>> = HashMap::new();
+
+    for settlement in settlements {
+        groups
+            .entry(settlement.signer_manager)
+            .or_default()
+            .push(settlement.item);
+    }
+
+    let mut batches = Vec::new();
+    for (signer_manager, items) in groups {
+        for chunk in items.chunks(MAX_STAKERS_LENGTH) {
+            batches.push(SettlementsBatch {
+                signer_manager: signer_manager.clone(),
+                items: chunk.to_vec(),
                 deployer: deployer.clone(),
             });
         }
@@ -434,11 +591,12 @@ impl TryFrom<ClarityValue> for SettlementKey {
 
     fn try_from(value: ClarityValue) -> Result<Self, Self::Error> {
         let mut clarity_map = ClarityTuple::try_from(value)?;
-        Ok(SettlementKey {
-            staker: clarity_map.remove_principal("staker")?,
-            signer_manager: clarity_map.remove_principal("signer-manager")?,
-            request_id: clarity_map.remove_uint("request-id")?,
-        })
+
+        let staker = clarity_map.remove_principal("staker")?;
+        let signer_manager = clarity_map.remove_principal("signer-manager")?;
+        let request_id = clarity_map.remove_uint("request-id")?;
+
+        Ok(SettlementKey::new(staker, signer_manager, request_id))
     }
 }
 
@@ -456,10 +614,12 @@ impl TryFrom<ClarityValue> for PendingSettlement {
             return Err(Error::UnexpectedPrincipal(signer_manager));
         };
 
+        let staker = clarity_map.remove_principal("staker")?;
+        let request_id = clarity_map.remove_uint("request-id")?;
+
         Ok(PendingSettlement {
             signer_manager,
-            staker: clarity_map.remove_principal("staker")?,
-            request_id: clarity_map.remove_uint("request-id")?,
+            item: SettlementItem::new(staker, request_id),
         })
     }
 }
@@ -546,11 +706,11 @@ mod tests {
                 ),
                 (
                     ClarityName::from("staker"),
-                    ClarityValue::Principal(value.staker.clone()),
+                    ClarityValue::Principal(value.item.staker().clone()),
                 ),
                 (
                     ClarityName::from("request-id"),
-                    ClarityValue::UInt(value.request_id),
+                    ClarityValue::UInt(value.item.request_id()),
                 ),
             ];
             ClarityValue::Tuple(TupleData::from_data(tuple_entries).unwrap())
@@ -559,21 +719,7 @@ mod tests {
 
     impl From<&SettlementKey> for ClarityValue {
         fn from(value: &SettlementKey) -> Self {
-            let tuple_entries = vec![
-                (
-                    ClarityName::from("staker"),
-                    ClarityValue::Principal(value.staker.clone()),
-                ),
-                (
-                    ClarityName::from("signer-manager"),
-                    ClarityValue::Principal(value.signer_manager.clone()),
-                ),
-                (
-                    ClarityName::from("request-id"),
-                    ClarityValue::UInt(value.request_id),
-                ),
-            ];
-            ClarityValue::Tuple(TupleData::from_data(tuple_entries).unwrap())
+            ClarityValue::Tuple(value.clone().into_tuple())
         }
     }
 
@@ -936,10 +1082,10 @@ mod tests {
             .find(|batch| batch.signer_manager() == &sm_b)
             .expect("batch for signer-manager B");
 
-        assert_eq!(batch_a.stakers(), &[staker1, staker3]);
-        assert_eq!(batch_b.stakers(), &[staker2]);
         assert_eq!(batch_a.deployer(), &StacksAddress::burn_address(false));
         assert_eq!(batch_b.deployer(), &StacksAddress::burn_address(false));
+        assert_eq!(batch_a.clone().stakers(), vec![staker1, staker3]);
+        assert_eq!(batch_b.clone().stakers(), vec![staker2]);
     }
 
     #[test]
@@ -964,14 +1110,116 @@ mod tests {
         let batches = batch_claims(claims.clone(), &StacksAddress::burn_address(false));
         assert_eq!(batches.len(), 2);
         assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
-        assert_eq!(batches[0].stakers().len(), MAX_STAKERS_LENGTH);
-        assert_eq!(batches[1].stakers().len(), 1);
-        assert_eq!(batches[0].stakers()[0], claims[0].staker);
+        assert_eq!(batches[0].num_stakers(), MAX_STAKERS_LENGTH);
+        assert_eq!(batches[1].num_stakers(), 1);
+        let batch0_stakers = batches[0].clone().stakers();
+        assert_eq!(batch0_stakers[0], claims[0].staker);
         assert_eq!(
-            batches[0].stakers()[MAX_STAKERS_LENGTH - 1],
+            batch0_stakers[MAX_STAKERS_LENGTH - 1],
             claims[MAX_STAKERS_LENGTH - 1].staker
         );
-        assert_eq!(batches[1].stakers()[0], claims[MAX_STAKERS_LENGTH].staker);
+        assert_eq!(
+            batches[1].clone().stakers()[0],
+            claims[MAX_STAKERS_LENGTH].staker
+        );
+    }
+
+    fn settlement(
+        signer_manager: &QualifiedContractIdentifier,
+        staker: PrincipalData,
+        request_id: u128,
+    ) -> PendingSettlement {
+        PendingSettlement {
+            signer_manager: signer_manager.clone(),
+            item: SettlementItem::new(staker, request_id),
+        }
+    }
+
+    #[test]
+    fn batch_pending_settlements_empty() {
+        assert!(batch_settlements(vec![], &StacksAddress::burn_address(false)).is_empty());
+    }
+
+    #[test]
+    fn batch_pending_settlements_groups_by_signer_manager() {
+        let sm_a = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+        let sm_b = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.other-manager",
+        )
+        .unwrap();
+        let staker1 = PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap();
+        let staker2 = PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap();
+        let staker3 =
+            PrincipalData::parse("ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.staker-3").unwrap();
+
+        let settlements = vec![
+            settlement(&sm_a, staker1.clone(), 1),
+            settlement(&sm_b, staker2.clone(), 2),
+            settlement(&sm_a, staker3.clone(), 3),
+        ];
+
+        let batches = batch_settlements(settlements, &StacksAddress::burn_address(false));
+        assert_eq!(batches.len(), 2);
+
+        let batch_a = batches
+            .iter()
+            .find(|batch| batch.signer_manager() == &sm_a)
+            .expect("batch for signer-manager A");
+        let batch_b = batches
+            .iter()
+            .find(|batch| batch.signer_manager() == &sm_b)
+            .expect("batch for signer-manager B");
+
+        let batch_a_items: Vec<_> = batch_a.clone().into_items().collect();
+        assert_eq!(
+            batch_a_items,
+            vec![
+                SettlementItem::new(staker1, 1),
+                SettlementItem::new(staker3, 3)
+            ]
+        );
+        assert_eq!(batch_a.deployer(), &StacksAddress::burn_address(false));
+        assert_eq!(batch_b.deployer(), &StacksAddress::burn_address(false));
+        let batch_b_items: Vec<_> = batch_b.clone().into_items().collect();
+        assert_eq!(batch_b_items, vec![SettlementItem::new(staker2, 2)]);
+    }
+
+    #[test]
+    fn batch_pending_settlements_chunks_at_max_items() {
+        let sm = QualifiedContractIdentifier::parse(
+            "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.signer-manager",
+        )
+        .unwrap();
+        let settlements: Vec<_> = (0..=MAX_STAKERS_LENGTH)
+            .map(|i| {
+                settlement(
+                    &sm,
+                    PrincipalData::parse(&format!(
+                        "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039.s{i}"
+                    ))
+                    .unwrap(),
+                    i as u128,
+                )
+            })
+            .collect();
+
+        let batches = batch_settlements(settlements.clone(), &StacksAddress::burn_address(false));
+        assert_eq!(batches.len(), 2);
+        assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
+
+        let batch0_items: Vec<_> = batches[0].clone().into_items().collect();
+        let batch1_items: Vec<_> = batches[1].clone().into_items().collect();
+        assert_eq!(batch0_items.len(), MAX_STAKERS_LENGTH);
+        assert_eq!(batch1_items.len(), 1);
+        assert_eq!(batch0_items[0], settlements[0].item);
+        assert_eq!(
+            batch0_items[MAX_STAKERS_LENGTH - 1],
+            settlements[MAX_STAKERS_LENGTH - 1].item
+        );
+        assert_eq!(batch1_items[0], settlements[MAX_STAKERS_LENGTH].item);
     }
 
     #[tokio::test]
@@ -984,8 +1232,7 @@ mod tests {
 
         let settlement = PendingSettlement {
             signer_manager,
-            staker: staker.clone(),
-            request_id: 7,
+            item: SettlementItem::new(staker, 7),
         };
         let next = settlement.settlement_key();
 
@@ -1037,16 +1284,12 @@ mod tests {
         )
         .unwrap();
 
-        let cursor = SettlementKey {
-            staker: staker.clone(),
-            signer_manager: PrincipalData::Contract(signer_manager.clone()),
-            request_id: 1,
-        };
+        let cursor = SettlementKey::new(staker, PrincipalData::Contract(signer_manager.clone()), 1);
 
+        let staker2 = PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap();
         let settlement = PendingSettlement {
             signer_manager,
-            staker: PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
-            request_id: 99,
+            item: SettlementItem::new(staker2, 99),
         };
 
         let cursor_hex = ClarityValue::some(ClarityValue::from(&cursor))
@@ -1088,7 +1331,7 @@ mod tests {
         );
 
         let result = registry
-            .get_pending_settlements(Some(&cursor), None)
+            .get_pending_settlements(Some(cursor), None)
             .await
             .unwrap();
 
@@ -1148,15 +1391,17 @@ mod tests {
         .unwrap();
 
         // First page: ticks burned on non-settleable nodes, resume cursor only.
-        let skipped = SettlementKey {
-            staker: PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap(),
-            signer_manager: PrincipalData::Contract(signer_manager.clone()),
-            request_id: 3,
-        };
+        let skipped = SettlementKey::new(
+            PrincipalData::parse("ST2FQWJMF9CGPW34ZWK8FEPNK072NEV1VKRNBBMJ9").unwrap(),
+            PrincipalData::Contract(signer_manager.clone()),
+            3,
+        );
         let pending = PendingSettlement {
             signer_manager: signer_manager.clone(),
-            staker: PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
-            request_id: 99,
+            item: SettlementItem::new(
+                PrincipalData::parse("ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM").unwrap(),
+                99,
+            ),
         };
 
         let skipped_hex = ClarityValue::some(ClarityValue::from(&skipped))

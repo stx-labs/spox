@@ -22,6 +22,8 @@ use clarity::vm::types::TypeSignature;
 
 use crate::stacks::reward_claim_registry::MAX_STAKERS_LENGTH;
 use crate::stacks::reward_claim_registry::RewardClaimsBatch;
+use crate::stacks::reward_claim_registry::SettlementsBatch;
+use crate::stacks::reward_claim_registry::TUPLE_SETTLEMENT_ITEM_SIGNATURE;
 
 /// The type signature for the list of 100 stakers.
 ///
@@ -32,6 +34,16 @@ use crate::stacks::reward_claim_registry::RewardClaimsBatch;
 /// this won't panic in production.
 static LIST_PRINCIPALS_SIGNATURE: LazyLock<ListTypeData> = LazyLock::new(|| {
     ListTypeData::new_list(TypeSignature::PrincipalType, MAX_STAKERS_LENGTH as u32).unwrap()
+});
+
+/// The type signature for the list of 100 `{staker, request-id}` items.
+///
+/// Same size bounds as [`LIST_PRINCIPALS_SIGNATURE`]: depth is small and the
+/// max serialized size is well under 1 MiB. Exercised by the dummy
+/// `SettlementsBatch` contract-call test.
+static LIST_SETTLEMENT_ITEMS_SIGNATURE: LazyLock<ListTypeData> = LazyLock::new(|| {
+    let entry_type = TUPLE_SETTLEMENT_ITEM_SIGNATURE.clone().into();
+    ListTypeData::new_list(entry_type, MAX_STAKERS_LENGTH as u32).unwrap()
 });
 
 /// The name of the trait that signer managers must implement.
@@ -74,7 +86,7 @@ pub struct StacksTxPostConditions {
 }
 
 /// A trait to ease construction of a contract call StacksTransaction.
-pub trait AsContractCall {
+pub trait IntoContractCall: Sized {
     /// The name of the clarity smart contract that relates to this struct.
     const CONTRACT_NAME: &'static str;
     /// The specific function name that relates to this struct.
@@ -82,10 +94,10 @@ pub trait AsContractCall {
     /// The stacks address that deployed the contract.
     fn deployer_address(&self) -> &StacksAddress;
     /// The arguments to the clarity function.
-    fn as_contract_args(&self) -> Vec<ClarityValue>;
-    /// Convert this struct to a Stacks contract call.
-    fn as_contract_call(&self) -> TransactionContractCall {
-        TransactionContractCall {
+    fn into_contract_args(self) -> Vec<ClarityValue>;
+    /// The payload of the transaction
+    fn into_tx_payload(self) -> TransactionPayload {
+        let contract_call = TransactionContractCall {
             address: self.deployer_address().clone(),
             // The following From::from calls are more dangerous than they
             // appear. Under the hood they call their TryFrom::try_from
@@ -93,12 +105,9 @@ pub trait AsContractCall {
             // is fine in our test.
             function_name: ClarityName::from(Self::FUNCTION_NAME),
             contract_name: ContractName::from(Self::CONTRACT_NAME),
-            function_args: self.as_contract_args(),
-        }
-    }
-    /// The payload of the transaction
-    fn tx_payload(&self) -> TransactionPayload {
-        TransactionPayload::ContractCall(self.as_contract_call())
+            function_args: self.into_contract_args(),
+        };
+        TransactionPayload::ContractCall(contract_call)
     }
     /// Any post-execution conditions that we'd like to enforce. The
     /// deployer corresponds to the principal in the Transaction
@@ -113,7 +122,7 @@ pub trait AsContractCall {
     }
 }
 
-impl AsContractCall for RewardClaimsBatch {
+impl IntoContractCall for RewardClaimsBatch {
     /// The name of the clarity smart contract that relates to this struct.
     const CONTRACT_NAME: &'static str = "reward-claim-registry";
     /// The specific function name that relates to this struct.
@@ -123,12 +132,12 @@ impl AsContractCall for RewardClaimsBatch {
         self.deployer()
     }
     /// The arguments to the clarity function.
-    fn as_contract_args(&self) -> Vec<ClarityValue> {
+    fn into_contract_args(self) -> Vec<ClarityValue> {
         let callable = CallableData {
             contract_identifier: self.signer_manager().clone(),
             trait_identifier: Some(make_trait_identifier(self.deployer().clone())),
         };
-        let stakers = self.stakers().iter().cloned().map(ClarityValue::Principal);
+        let stakers = self.stakers().into_iter().map(ClarityValue::Principal);
         let stakers = ListData {
             data: stakers.collect(),
             type_signature: LIST_PRINCIPALS_SIGNATURE.clone(),
@@ -137,6 +146,34 @@ impl AsContractCall for RewardClaimsBatch {
         vec![
             ClarityValue::CallableContract(callable),
             ClarityValue::Sequence(SequenceData::List(stakers)),
+        ]
+    }
+}
+
+impl IntoContractCall for SettlementsBatch {
+    /// The name of the clarity smart contract that relates to this struct.
+    const CONTRACT_NAME: &'static str = "reward-claim-registry";
+    /// The specific function name that relates to this struct.
+    const FUNCTION_NAME: &'static str = "settle-pending-withdrawals";
+    /// The stacks address that deployed the contract.
+    fn deployer_address(&self) -> &StacksAddress {
+        self.deployer()
+    }
+    /// The arguments to the clarity function.
+    fn into_contract_args(self) -> Vec<ClarityValue> {
+        let callable = CallableData {
+            contract_identifier: self.signer_manager().clone(),
+            trait_identifier: Some(make_trait_identifier(self.deployer().clone())),
+        };
+        let data = self
+            .into_items()
+            .map(|item| ClarityValue::Tuple(item.into_tuple()))
+            .collect::<Vec<_>>();
+        let type_signature = LIST_SETTLEMENT_ITEMS_SIGNATURE.clone();
+
+        vec![
+            ClarityValue::CallableContract(callable),
+            ClarityValue::Sequence(SequenceData::List(ListData { data, type_signature })),
         ]
     }
 }
@@ -151,6 +188,15 @@ mod tests {
         // it doesn't panic now, it can never panic at runtime.
         let call = RewardClaimsBatch::dummy();
 
-        let _ = call.as_contract_call();
+        let _ = call.into_tx_payload();
+    }
+
+    #[test]
+    fn settle_pending_withdrawals_contract_call_creation() {
+        // This is to check that this function doesn't implicitly panic. If
+        // it doesn't panic now, it can never panic at runtime.
+        let call = SettlementsBatch::dummy();
+
+        let _ = call.into_tx_payload();
     }
 }

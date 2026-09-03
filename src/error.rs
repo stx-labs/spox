@@ -27,6 +27,10 @@ pub enum Error {
     #[error("clarity bad list: {0:?}")]
     ClarityBadList(Box<clarity::vm::errors::Error>),
 
+    /// Could not construct a clarity value.
+    #[error("clarity construction error: {0:?}")]
+    ClarityTuple(Box<clarity::vm::errors::Error>),
+
     /// Missing an expected tuple entry. This shouldn't happen.
     #[error("missing an expected tuple entry: {0}")]
     ClarityMissingTupleEntry(&'static str),

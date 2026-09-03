@@ -18,7 +18,7 @@ use crate::error::Error;
 use crate::stacks::node::StacksClient;
 use crate::stacks::node::SubmitTxResponse;
 use crate::stacks::reward_claim_registry::RewardClaimRegistry;
-use crate::stacks::transaction::AsContractCall as _;
+use crate::stacks::transaction::IntoContractCall as _;
 use crate::stacks::wallet::StacksWallet;
 
 /// The transaction fee for all contract call transactions against the
@@ -84,10 +84,10 @@ async fn process_claims(state: &RewardClaimState, chain_tip: &BlockRef) -> Resul
     for batch in batches {
         tracing::info!(
             "signer_manager" = %batch.signer_manager(),
-            "num_stakers" = %batch.stakers().len(),
+            "num_stakers" = %batch.num_stakers(),
             "processing process-reward-claims batch",
         );
-        let payload = batch.tx_payload();
+        let payload = batch.into_tx_payload();
         let tx = state.wallet.sign_tx(payload, TX_FEE);
 
         match state.client().submit_tx(&tx).await {
