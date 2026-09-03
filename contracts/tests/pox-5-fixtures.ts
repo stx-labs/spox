@@ -79,6 +79,7 @@ export const ERR_NOT_ADMIN = 602n;
 export const ERR_NO_CURRENT_POSITION = 603n;
 export const ERR_ZERO_FEE = 604n;
 export const ERR_ALREADY_CLAIMED = 605n;
+export const ERR_REWARDS_NOT_CALCULATED = 606n;
 export const ERR_UNKNOWN_PENDING_WITHDRAWAL = 607n;
 export const ERR_INVALID_START_REWARD_CYCLE = 608n;
 export const ERR_UNAUTHORIZED = 609n;
@@ -164,10 +165,27 @@ export function distributionCycleToBurnHeight(cycle: bigint): bigint {
 
 /**
  * Mine until current-distribution-cycle > distCycle, so a registration whose
- * next-claim-distribution is `distCycle` becomes pending (k < CD).
+ * next-claim-distribution is `distCycle` becomes time-eligible (k < CD), then
+ * run pox-5 calculate-rewards so that claim distribution is covered
+ * (compute at CD = distCycle+1). Pass active bond indexes when bonds are
+ * live; otherwise pox-5 rejects an empty bond-periods list.
  */
-export function mineUntilPastDistribution(distCycle: bigint) {
+export function mineUntilPastDistribution(
+  distCycle: bigint,
+  bondPeriods: bigint[] = [],
+) {
   mineUntil(distributionCycleToBurnHeight(distCycle + 1n));
+  return calculateRewards(bondPeriods);
+}
+
+/** Run pox-5 calculate-rewards for the current distribution cycle. */
+export function calculateRewards(bondPeriods: bigint[] = []) {
+  return simnet.callPublicFn(
+    POX5,
+    "calculate-rewards",
+    [Cl.list(bondPeriods.map((b) => Cl.uint(b)))],
+    deployer,
+  );
 }
 
 /**
@@ -560,7 +578,7 @@ export function fundAndCalculateRewards(rewards: bigint, rewardCycle: bigint) {
     deployer,
   );
   mineUntil(rewardCycleToBurnHeight(rewardCycle) + HALF_CYCLE_LENGTH);
-  return simnet.callPublicFn(POX5, "calculate-rewards", [Cl.list([])], deployer);
+  return calculateRewards();
 }
 
 /**

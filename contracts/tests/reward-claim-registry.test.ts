@@ -8,6 +8,7 @@ import {
   ERR_NO_CURRENT_POSITION,
   ERR_NOT_ADMIN,
   ERR_NOT_REGISTERED,
+  ERR_REWARDS_NOT_CALCULATED,
   ERR_SIGNER_MANAGER_MISMATCH,
   ERR_UNKNOWN_PENDING_WITHDRAWAL,
   ERR_REENTRANT_CALL,
@@ -33,6 +34,7 @@ import {
   fundAndCalculateRewards,
   fundAndClaimSignerRewards,
   burnHeight,
+  calculateRewards,
   getPendingWithdrawals,
   getPendingClaims,
   getRegistrations,
@@ -43,8 +45,10 @@ import {
   initialNextClaimDistribution,
   initPox5,
   registerMaliciousSignerManager,
+  mineUntil,
   mineUntilPastDistribution,
   mineUntilWithdrawalListable,
+  distributionCycleToBurnHeight,
   processRewardClaim,
   registerForBond,
   registerForClaims,
@@ -712,6 +716,29 @@ describe("get-pending-claims", () => {
     expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, STX_START, Cl.none())]));
   });
 
+  it("stays empty until calculate-rewards covers the claim distribution", () => {
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    // Advance past the claim distribution without calling calculate-rewards.
+    mineUntil(distributionCycleToBurnHeight(STX_FIRST_CLAIM_DIST + 1n));
+    expect(currentDistributionCycle()).toBe(STX_FIRST_CLAIM_DIST + 1n);
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
+
+    calculateRewards();
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, STX_START, Cl.none())]));
+  });
+
+  it("stays pending for an older claim when a newer distribution is uncalculated", () => {
+    registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    // Calculate for CD = next+1 (covers the claim), then mine further without calculating.
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, STX_START, Cl.none())]));
+
+    mineUntil(distributionCycleToBurnHeight(STX_FIRST_CLAIM_DIST + 3n));
+    expect(currentDistributionCycle()).toBeGreaterThan(STX_FIRST_CLAIM_DIST + 1n);
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, STX_START, Cl.none())]));
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
+  });
+
   it("walks multiple registrations in insertion order", () => {
     stakeFor(wallet2, SIGNER_SET_MIN_USTX, 2n);
     registerForClaims(wallet1, FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
@@ -1023,6 +1050,20 @@ describe("process-reward-claim (direct sBTC payout)", () => {
     expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
   });
 
+  it("errors when calculate-rewards has not covered the claim distribution", () => {
+    registerForClaims(wallet1, 3n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
+    mineUntil(distributionCycleToBurnHeight(STX_FIRST_CLAIM_DIST + 1n));
+
+    expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
+    expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeErr(
+      Cl.uint(ERR_REWARDS_NOT_CALCULATED),
+    );
+    // registration untouched
+    expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeSome(
+      stxRegistration(3n, STX_FIRST_CLAIM_DIST),
+    );
+  });
+
   it("errors for a staker with no registration", () => {
     expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeErr(Cl.uint(ERR_NOT_REGISTERED));
   });
@@ -1174,7 +1215,7 @@ describe("bond path", () => {
     expect(result).toBeOk(Cl.uint(3));
     expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
 
-    mineUntilPastDistribution(firstClaimDist);
+    mineUntilPastDistribution(firstClaimDist, [BOND_INDEX]);
     expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, start, Cl.some(Cl.uint(BOND_INDEX)))]));
   });
 
@@ -1182,7 +1223,7 @@ describe("bond path", () => {
     const start = bondPeriodToRewardCycle(BOND_INDEX);
     const firstClaimDist = initialNextClaimDistribution(start, false);
     registerForClaims(wallet1, 3n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, start, false);
-    mineUntilPastDistribution(firstClaimDist);
+    mineUntilPastDistribution(firstClaimDist, [BOND_INDEX]);
     expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
     expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
     expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeSome(
@@ -1760,7 +1801,7 @@ describe("claim schedule invariants", () => {
       const bond = Cl.some(Cl.uint(BOND_INDEX));
 
       registerForClaims(wallet1, 4n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, start, false);
-      mineUntilPastDistribution(firstHalf);
+      mineUntilPastDistribution(firstHalf, [BOND_INDEX]);
 
       expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, start, bond)]));
       expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
@@ -1774,7 +1815,7 @@ describe("claim schedule invariants", () => {
 
       expect(getPendingClaims()).toBeOk(pendingClaimsPage([]));
 
-      mineUntilPastDistribution(secondHalf);
+      mineUntilPastDistribution(secondHalf, [BOND_INDEX]);
       expect(getPendingClaims()).toBeOk(pendingClaimsPage([pendingRow(wallet1, start, bond)]));
       expect(processRewardClaim(wallet1, wallet1, SIGNER_MANAGER).result).toBeOk(Cl.none());
       expect(getRegistration(wallet1, SIGNER_MANAGER)).toBeSome(
@@ -1792,7 +1833,7 @@ describe("claim schedule invariants", () => {
 
       registerForClaims(wallet1, 4n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, start, false);
       // Leave both halves of `start` in the past before the first claim.
-      mineUntilPastDistribution(secondHalf);
+      mineUntilPastDistribution(secondHalf, [BOND_INDEX]);
       expect(currentDistributionCycle()).toBeGreaterThan(secondHalf);
       expect(currentRewardCycle()).toBeGreaterThan(start);
 
@@ -1892,8 +1933,11 @@ describe("reentrancy", () => {
       STX_START,
       true,
     );
-    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
   });
+
+  function advanceToPending() {
+    mineUntilPastDistribution(STX_FIRST_CLAIM_DIST);
+  }
 
   function expectSingleAdvance() {
     expect(getRegistration(wallet1, MALICIOUS_SIGNER_MANAGER)).toBeSome(
@@ -1902,6 +1946,7 @@ describe("reentrancy", () => {
   }
 
   it("blocks process-reward-claims reentry from claim-staker-rewards", () => {
+    advanceToPending();
     setMaliciousReenterMode(REENTER_PROCESS_CLAIMS, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
       Cl.none(),
@@ -1911,6 +1956,7 @@ describe("reentrancy", () => {
   });
 
   it("blocks cancel-registration reentry from claim-staker-rewards", () => {
+    advanceToPending();
     const before = stxBalance(wallet1);
     setMaliciousReenterMode(REENTER_CANCEL, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
@@ -1922,6 +1968,7 @@ describe("reentrancy", () => {
   });
 
   it("blocks settle-pending-withdrawals reentry from claim-staker-rewards", () => {
+    advanceToPending();
     setMaliciousReenterMode(REENTER_SETTLE, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
       Cl.none(),
@@ -1931,7 +1978,10 @@ describe("reentrancy", () => {
   });
 
   it("blocks process-reward-claims reentry from claim-rewards (pull path)", () => {
+    // Fund + calculate before advancing so get-earned > 0 for the claim's RC.
     fundAndCalculateRewards(2000n, 1n);
+    expect(getEarned(MALICIOUS_SIGNER_MANAGER, 1n, Cl.none())).toBeGreaterThan(0n);
+    advanceToPending();
     expect(getEarned(MALICIOUS_SIGNER_MANAGER, 1n, Cl.none())).toBeGreaterThan(0n);
 
     setMaliciousReenterMode(REENTER_PROCESS_CLAIMS, wallet1);
@@ -1943,6 +1993,7 @@ describe("reentrancy", () => {
   });
 
   it("rejects add-claims reentry via authorize-staker-or-admin, not the reentrancy gate", () => {
+    advanceToPending();
     setMaliciousReenterMode(REENTER_ADD_CLAIMS, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
       Cl.none(),
@@ -1952,6 +2003,7 @@ describe("reentrancy", () => {
   });
 
   it("rejects register-for-claims reentry via authorize-staker-or-admin, not the reentrancy gate", () => {
+    advanceToPending();
     setMaliciousReenterMode(REENTER_REGISTER, wallet1);
     expect(processRewardClaim(wallet1, wallet1, MALICIOUS_SIGNER_MANAGER).result).toBeOk(
       Cl.none(),

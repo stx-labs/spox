@@ -18,6 +18,8 @@
 (define-constant ERR_ZERO_FEE (err u604))
 ;; Nothing new to claim yet: next-claim-distribution has not fully elapsed
 (define-constant ERR_ALREADY_CLAIMED (err u605))
+;; pox-5 calculate-rewards has not covered this registration's claim distribution
+(define-constant ERR_REWARDS_NOT_CALCULATED (err u606))
 ;; The request-id is not a tracked pending withdrawal for this key
 (define-constant ERR_UNKNOWN_PENDING_WITHDRAWAL (err u607))
 ;; start-reward-cycle is before the position's first-reward-cycle
@@ -92,7 +94,8 @@
         ;; catching up past a finished cycle.
         one-claim-per-reward-cycle: bool,
         ;; The next distribution cycle this registration will settle.
-        ;; Pending when this value is less than current-distribution-cycle.
+        ;; Pending when this value is less than current-distribution-cycle and
+        ;; calculate-rewards has covered through the end of this distribution.
         next-claim-distribution: uint,
         ;; STX held by this contract for unconsumed installments. Burned one
         ;; installment at a time on advance; refunded to the staker on cancel.
@@ -369,8 +372,38 @@
     )
 )
 
-;; Returns true if this registration has remaining cycles left and its next
-;; claim distribution is strictly before the current distribution cycle.
+;; Get the latest distribution cycle for which calculate-rewards has run.
+;; Returns none when calculate-rewards has never run.
+;;
+;; #[allow(unchecked_data)]
+(define-private (get-last-rewards-compute-distribution)
+    (let ((height (contract-call? 'ST000000000000000000002AMW42H.pox-5 get-last-reward-compute-height)))
+        (if (is-eq height u0)
+            none
+            (some (contract-call? 'ST000000000000000000002AMW42H.pox-5 burn-height-to-distribution-index
+                height
+            ))
+        )
+    )
+)
+
+;; Returns true when `last-compute-distribution` covers through the end of
+;; `claim-distribution` (covered cycle >= claim-distribution).
+;;
+;; #[allow(unchecked_data)]
+(define-private (rewards-calculated-for-claim-distribution
+        (claim-distribution uint)
+        (last-compute-distribution (optional uint))
+    )
+    (match last-compute-distribution
+        covered (>= covered claim-distribution)
+        false
+    )
+)
+
+;; Returns true if this registration has remaining cycles left, its next claim
+;; distribution is strictly before the current distribution cycle, and
+;; calculate-rewards has covered that claim distribution.
 (define-private (is-pending
         (registration {
             remaining-cycles: uint,
@@ -380,10 +413,14 @@
             prepaid-ustx: uint,
         })
         (current-distribution-cycle uint)
+        (last-compute-distribution (optional uint))
     )
     (and
         (> (get remaining-cycles registration) u0)
         (< (get next-claim-distribution registration) current-distribution-cycle)
+        (rewards-calculated-for-claim-distribution (get next-claim-distribution registration)
+            last-compute-distribution
+        )
     )
 )
 
@@ -422,12 +459,13 @@
     )
 )
 
-;; Fold step for get-pending-claims. From the current `node` it reads that
-;; registration, appends a row when it is pending, records `last-visited`, and
-;; advances `node` to the next linked-list entry. Once `node` is none (walked
-;; past the tail) it is a no-op for the remaining ticks.
-;; `current-distribution-cycle` rides in the accumulator so the pending check
-;; never re-reads it. `tick` is unused: the tick list only bounds iterations.
+;; Fold step for get-pending-claims. 
+;;
+;; From the current `node` it reads that registration, appends a row when
+;; it is pending, records `last-visited`, and advances `node` to the next
+;; linked-list entry. Once `node` is none it is a no-op for the remaining
+;; ticks. The `last-compute-distribution` is the distribution cycle of the
+;; last time that `pox-5::calculate-rewards` was run.
 (define-private (pending-claims-step
         (tick_ uint)
         (acc {
@@ -440,6 +478,7 @@
                 signer-manager: principal,
             }),
             current-distribution-cycle: uint,
+            last-compute-distribution: (optional uint),
             rows: (list 100
                 {
                     signer-manager: principal,
@@ -458,7 +497,9 @@
             )))
             (match (map-get? registrations key)
                 registration
-                (if (is-pending registration (get current-distribution-cycle acc))
+                (if (is-pending registration (get current-distribution-cycle acc)
+                        (get last-compute-distribution acc)
+                    )
                     (merge acc {
                         node: next-node,
                         last-visited: (some key),
@@ -491,14 +532,21 @@
     )
 )
 
-;; List registrations whose next claim is pending. Walks the registration
-;; linked list from cursor, or from the head when cursor is none, and
-;; returns up to 100 rows where remaining-cycles is greater than zero and
-;; next-claim-distribution is less than the current distribution cycle.
-;; Non-pending registrations still consume walk ticks without appending a
-;; row, so a short or empty `rows` list does not mean the tail was reached.
-;; Use the returned `next` cursor: none means the walk hit the tail; some key
-;; means pass that key as the next `cursor` to resume after it.
+;; List registrations whose next claim is pending. A registration is deemed
+;; pending when:
+;;
+;; * The remaining-cycles is greater than zero
+;; * next-claim-distribution is less than the current distribution cycle
+;; * pox-5::calculate-rewards has covered the distribution that will be
+;;   claimed for next
+;;
+;; Walks the registration linked list from cursor, or from the head when
+;; cursor is none, and returns up to 100 rows where the registration is
+;; pending. Non-pending registrations are omitted, so a short or empty
+;; `rows` list does not mean all pending registrations have been fetched.
+;; Use the returned `next` cursor, where `none` means the walk hit the
+;; tail. Pass `some key` as the next `cursor` to paginate all
+;; registrations.
 ;;
 ;; Parameters:
 ;;   cursor  none to start at the head, or the `next` key from the previous
@@ -524,13 +572,13 @@
                 )
                 (var-get registration-ll-head)
             ))
-            ;; PENDING_TICKS is the (list 100 uint) that bounds the walk to at
-            ;; most 100 node visits per call. `current-distribution-cycle` is
-            ;; read once here and threaded through the fold.
+            ;; PENDING_TICKS bounds the walk to at most 100 node visits per
+            ;; call.
             (walk (fold pending-claims-step PENDING_TICKS {
                 node: start,
                 last-visited: none,
                 current-distribution-cycle: (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle),
+                last-compute-distribution: (get-last-rewards-compute-distribution),
                 rows: (list),
             }))
             ;; If `node` is still `some` after the fold, ticks ran out with more
@@ -1118,6 +1166,7 @@
         (staker principal)
         (signer-manager <reward-claim-signer-manager-trait>)
         (current-distribution-cycle uint)
+        (last-compute-distribution (optional uint))
     )
     (let (
             (signer-manager-contract (contract-of signer-manager))
@@ -1132,6 +1181,10 @@
         )
         (asserts! (> (get remaining-cycles registration) u0) ERR_NOT_REGISTERED)
         (asserts! (< claim-distribution current-distribution-cycle) ERR_ALREADY_CLAIMED)
+        (asserts!
+            (rewards-calculated-for-claim-distribution claim-distribution last-compute-distribution)
+            ERR_REWARDS_NOT_CALCULATED
+        )
         ;; Ensure the signer-manager has pulled this cycle's rewards from pox-5.
         ;; get-earned > u0 means claim-rewards is still owed for this scope, so
         ;; pull it now (STX-stake rewards for a `none` bond, or bond `idx`).
@@ -1256,8 +1309,7 @@
 ;; Claim one installment for staker under signer-manager. Permissionless. The
 ;; signer-manager must be passed as a trait so claim-staker-rewards and
 ;; claim-rewards can dispatch on it; callers typically learn the principal from
-;; get-pending-claims. Reads pox-5's current distribution cycle and delegates to
-;; process-reward-claim-impl.
+;; get-pending-claims.
 ;;
 ;; Parameters:
 ;;
@@ -1269,7 +1321,8 @@
 ;;   ok with some withdrawal request-id when an L1 withdrawal was stored for
 ;;   later settlement, ok none for a direct sBTC payout, a skipped/invalid id,
 ;;   or a claim path that advanced without a payout, or an error if the
-;;   registration is missing or not yet pending.
+;;   registration is missing, not yet pending, or pox-5 calculate-rewards has
+;;   not covered this registration's claim distribution.
 ;;
 ;; #[allow(unchecked_data)]
 (define-public (process-reward-claim
@@ -1281,14 +1334,17 @@
         (try! (validate-no-reentrancy))
         (process-reward-claim-impl staker signer-manager
             (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle)
+            (get-last-rewards-compute-distribution)
         )
     )
 )
 
 ;; Claim installments for the given stakers, each keyed with the same
-;; signer-manager. Reads pox-5's current distribution cycle once and threads it
-;; through. Skips without aborting the batch any staker with no registration
-;; under this signer-manager or one not yet pending. Pull and claim failures
+;; signer-manager. Reads pox-5's current distribution cycle and last compute
+;; distribution once and threads them through. Skips without aborting the batch
+;; any staker with no registration under this signer-manager, one not yet
+;; pending, or one whose claim distribution has not been covered by
+;; calculate-rewards. Pull and claim failures
 ;; still advance and count as claimed. One signer-manager per call because the
 ;; trait must be a single top-level argument; the keeper builds stakers from
 ;; that signer-manager's get-pending-claims rows.
@@ -1313,6 +1369,7 @@
             (fold count-claim stakers {
                 signer-manager: signer-manager,
                 current-distribution-cycle: (contract-call? 'ST000000000000000000002AMW42H.pox-5 current-distribution-cycle),
+                last-compute-distribution: (get-last-rewards-compute-distribution),
                 claimed: u0,
             })
         ))
@@ -1329,11 +1386,12 @@
         (state {
             signer-manager: <reward-claim-signer-manager-trait>,
             current-distribution-cycle: uint,
+            last-compute-distribution: (optional uint),
             claimed: uint,
         })
     )
     (match (process-reward-claim-impl staker (get signer-manager state)
-        (get current-distribution-cycle state)
+        (get current-distribution-cycle state) (get last-compute-distribution state)
     )
         ok-val (merge state { claimed: (+ (get claimed state) u1) })
         err-code state
