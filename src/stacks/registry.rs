@@ -1,11 +1,10 @@
 //! Client for the on-chain deposit address registry.
 
 use bitcoin::ScriptBuf;
-use clarity::types::chainstate::StacksAddress;
 use clarity::vm::types::{
     ListData, ListTypeData, QualifiedContractIdentifier, SequenceData, TupleData,
 };
-use clarity::vm::{ClarityName, ContractName, Value};
+use clarity::vm::{ClarityName, Value};
 use sbtc::deposits::{DepositScriptInputs, ReclaimScriptInputs};
 
 use crate::error::Error;
@@ -37,10 +36,8 @@ pub struct RawRegisteredDeposit {
 /// Client for querying the on-chain deposit address registry contract.
 #[derive(Debug, Clone)]
 pub struct DepositAddressRegistry {
-    /// The deployer of the registry smart contract.
-    contract_principal: StacksAddress,
-    /// The name of the registry smart contract.
-    contract_name: ContractName,
+    /// The contract identifier of the registry smart contract.
+    contract: QualifiedContractIdentifier,
     /// The client used to make the requests.
     client: StacksClient,
 }
@@ -48,13 +45,7 @@ pub struct DepositAddressRegistry {
 impl DepositAddressRegistry {
     /// Create a new deposit address registry
     pub fn new(contract: QualifiedContractIdentifier, client: StacksClient) -> Self {
-        let contract_principal = contract.issuer.into();
-
-        Self {
-            contract_name: contract.name,
-            contract_principal,
-            client,
-        }
+        Self { contract, client }
     }
 
     /// Get the next address id from the registry
@@ -62,10 +53,10 @@ impl DepositAddressRegistry {
         let result = self
             .client
             .call_read(
-                &self.contract_principal,
-                &self.contract_name,
+                &self.contract.issuer,
+                &self.contract.name,
                 &ClarityName::from_literal("get-next-address-id"),
-                &self.contract_principal,
+                &self.contract.issuer,
                 &[],
                 None,
             )
@@ -108,10 +99,10 @@ impl DepositAddressRegistry {
         let result = self
             .client
             .call_read(
-                &self.contract_principal,
-                &self.contract_name,
+                &self.contract.issuer,
+                &self.contract.name,
                 &ClarityName::from_literal("get-addresses"),
-                &self.contract_principal,
+                &self.contract.issuer,
                 &arguments,
                 None,
             )

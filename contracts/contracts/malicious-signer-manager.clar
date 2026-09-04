@@ -4,7 +4,7 @@
 ;; guard is a single contract-wide flag, so the inner call still hits
 ;; ERR_REENTRANT_CALL before dispatching on that trait.
 
-(impl-trait .reward-claim-traits.reward-claim-signer-manager-trait)
+(impl-trait .reward-claim-registry.reward-claim-signer-manager-trait)
 (impl-trait 'ST000000000000000000002AMW42H.pox-5.signer-manager-trait)
 (use-trait signer-manager-trait 'ST000000000000000000002AMW42H.pox-5.signer-manager-trait)
 

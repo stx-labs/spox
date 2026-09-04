@@ -4,10 +4,8 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use clarity::types::chainstate::StacksAddress;
 use clarity::types::chainstate::StacksBlockId;
 use clarity::vm::ClarityName;
-use clarity::vm::ContractName;
 use clarity::vm::Value as ClarityValue;
 use clarity::vm::types::CallableData;
 use clarity::vm::types::ListData;
@@ -255,8 +253,8 @@ pub struct RewardClaimsBatch {
     signer_manager: QualifiedContractIdentifier,
     /// Staker principals to claim for in this call (1..=100).
     stakers: Vec<PrincipalData>,
-    /// The address that deployed the rewards claim registry.
-    deployer: StacksAddress,
+    /// The contract identifier of the rewards claim registry.
+    registry_contract: QualifiedContractIdentifier,
 }
 
 impl RewardClaimsBatch {
@@ -265,8 +263,8 @@ impl RewardClaimsBatch {
     pub fn dummy() -> Self {
         Self {
             signer_manager: QualifiedContractIdentifier::transient(),
-            stakers: vec![PrincipalData::from(StacksAddress::burn_address(false))],
-            deployer: StacksAddress::burn_address(false),
+            stakers: vec![PrincipalData::from(QualifiedContractIdentifier::transient())],
+            registry_contract: QualifiedContractIdentifier::transient(),
         }
     }
 
@@ -282,19 +280,17 @@ impl RewardClaimsBatch {
 }
 
 impl IntoContractCall for RewardClaimsBatch {
-    /// The name of the clarity smart contract that relates to this struct.
-    const CONTRACT_NAME: &'static str = "reward-claim-registry";
     /// The specific function name that relates to this struct.
     const FUNCTION_NAME: &'static str = "process-reward-claims";
-    /// The stacks address that deployed the contract.
-    fn deployer_address(&self) -> &StacksAddress {
-        &self.deployer
+    /// The identifier of the registry the contract.
+    fn contract_identifier(&self) -> &QualifiedContractIdentifier {
+        &self.registry_contract
     }
     /// The arguments to the clarity function.
     fn into_contract_args(self) -> Vec<ClarityValue> {
         let callable = CallableData {
             contract_identifier: self.signer_manager,
-            trait_identifier: Some(make_trait_identifier(self.deployer)),
+            trait_identifier: Some(make_trait_identifier(self.registry_contract)),
         };
         let stakers = self.stakers.into_iter().map(ClarityValue::Principal);
         let stakers = ListData {
@@ -319,19 +315,19 @@ pub struct WithdrawalsBatch {
     signer_manager: QualifiedContractIdentifier,
     /// Withdrawal items to settle in this call (1..=100).
     items: Vec<WithdrawalItem>,
-    /// The address that deployed the rewards claim registry.
-    deployer: StacksAddress,
+    /// The contract identifier of the rewards claim registry.
+    registry_contract: QualifiedContractIdentifier,
 }
 
 impl WithdrawalsBatch {
     /// Create a new dummy withdrawals batch.
     #[cfg(test)]
     pub fn dummy() -> Self {
-        let principal = PrincipalData::from(StacksAddress::burn_address(false));
+        let principal = PrincipalData::from(QualifiedContractIdentifier::transient());
         Self {
             signer_manager: QualifiedContractIdentifier::transient(),
             items: vec![WithdrawalItem::new(principal, 1)],
-            deployer: StacksAddress::burn_address(false),
+            registry_contract: QualifiedContractIdentifier::transient(),
         }
     }
 
@@ -347,19 +343,17 @@ impl WithdrawalsBatch {
 }
 
 impl IntoContractCall for WithdrawalsBatch {
-    /// The name of the clarity smart contract that relates to this struct.
-    const CONTRACT_NAME: &'static str = "reward-claim-registry";
     /// The specific function name that relates to this struct.
     const FUNCTION_NAME: &'static str = "settle-pending-withdrawals";
-    /// The stacks address that deployed the contract.
-    fn deployer_address(&self) -> &StacksAddress {
-        &self.deployer
+    /// The identifier of the registry the contract.
+    fn contract_identifier(&self) -> &QualifiedContractIdentifier {
+        &self.registry_contract
     }
     /// The arguments to the clarity function.
     fn into_contract_args(self) -> Vec<ClarityValue> {
         let callable = CallableData {
             contract_identifier: self.signer_manager,
-            trait_identifier: Some(make_trait_identifier(self.deployer)),
+            trait_identifier: Some(make_trait_identifier(self.registry_contract)),
         };
         let data = self
             .items
@@ -379,24 +373,16 @@ impl IntoContractCall for WithdrawalsBatch {
 /// Client for querying the on-chain reward claim registry contract.
 #[derive(Debug, Clone)]
 pub struct RewardClaimRegistry {
-    /// The deployer of the registry smart contract.
-    deployer: StacksAddress,
-    /// The name of the registry smart contract.
-    contract_name: ContractName,
+    /// The contract identifier of the registry smart contract.
+    registry_contract: QualifiedContractIdentifier,
     /// The client used to make the requests.
     client: StacksClient,
 }
 
 impl RewardClaimRegistry {
     /// Create a new reward claim registry client.
-    pub fn new(contract: QualifiedContractIdentifier, client: StacksClient) -> Self {
-        let deployer = contract.issuer.into();
-
-        Self {
-            contract_name: contract.name,
-            deployer,
-            client,
-        }
+    pub fn new(registry_contract: QualifiedContractIdentifier, client: StacksClient) -> Self {
+        Self { registry_contract, client }
     }
 
     /// Get a reference to the client.
@@ -437,10 +423,10 @@ impl RewardClaimRegistry {
         let result = self
             .client
             .call_read(
-                &self.deployer,
-                &self.contract_name,
+                &self.registry_contract.issuer,
+                &self.registry_contract.name,
                 &ClarityName::from_literal("get-pending-claims"),
-                &self.deployer,
+                &self.registry_contract.issuer,
                 &[cursor_arg],
                 chain_tip,
             )
@@ -479,7 +465,7 @@ impl RewardClaimRegistry {
     /// at most [`MAX_STAKERS_LENGTH`] stakers per batch.
     pub async fn get_pending_claim_batches(&self) -> Result<Vec<RewardClaimsBatch>, Error> {
         let claims = self.get_all_pending_claims().await?;
-        Ok(batch_claims(claims, &self.deployer))
+        Ok(batch_claims(claims, &self.registry_contract))
     }
 
     /// Fetch a page of pending withdrawals from the registry.
@@ -503,10 +489,10 @@ impl RewardClaimRegistry {
         let result = self
             .client
             .call_read(
-                &self.deployer,
-                &self.contract_name,
+                &self.registry_contract.issuer,
+                &self.registry_contract.name,
                 &ClarityName::from_literal("get-pending-withdrawals"),
-                &self.deployer,
+                &self.registry_contract.issuer,
                 &[cursor_arg],
                 chain_tip,
             )
@@ -546,14 +532,17 @@ impl RewardClaimRegistry {
     /// of at most [`MAX_STAKERS_LENGTH`] items per batch.
     pub async fn get_pending_withdrawal_batches(&self) -> Result<Vec<WithdrawalsBatch>, Error> {
         let withdrawals = self.get_all_pending_withdrawals().await?;
-        Ok(batch_withdrawals(withdrawals, &self.deployer))
+        Ok(batch_withdrawals(withdrawals, &self.registry_contract))
     }
 }
 
 /// Group pending claims by signer-manager and split into contract-call batches.
 ///
 /// Each batch has at most [`MAX_STAKERS_LENGTH`] stakers.
-fn batch_claims(claims: Vec<PendingClaim>, deployer: &StacksAddress) -> Vec<RewardClaimsBatch> {
+fn batch_claims(
+    claims: Vec<PendingClaim>,
+    registry_contract: &QualifiedContractIdentifier,
+) -> Vec<RewardClaimsBatch> {
     let mut groups: HashMap<QualifiedContractIdentifier, Vec<PrincipalData>> = HashMap::new();
 
     for claim in claims {
@@ -569,7 +558,7 @@ fn batch_claims(claims: Vec<PendingClaim>, deployer: &StacksAddress) -> Vec<Rewa
             batches.push(RewardClaimsBatch {
                 signer_manager: signer_manager.clone(),
                 stakers: chunk.to_vec(),
-                deployer: deployer.clone(),
+                registry_contract: registry_contract.clone(),
             });
         }
     }
@@ -583,7 +572,7 @@ fn batch_claims(claims: Vec<PendingClaim>, deployer: &StacksAddress) -> Vec<Rewa
 /// Each batch has at most [`MAX_STAKERS_LENGTH`] items.
 fn batch_withdrawals(
     withdrawals: Vec<PendingWithdrawal>,
-    deployer: &StacksAddress,
+    registry_contract: &QualifiedContractIdentifier,
 ) -> Vec<WithdrawalsBatch> {
     let mut groups: HashMap<QualifiedContractIdentifier, Vec<WithdrawalItem>> = HashMap::new();
 
@@ -600,7 +589,7 @@ fn batch_withdrawals(
             batches.push(WithdrawalsBatch {
                 signer_manager: signer_manager.clone(),
                 items: chunk.to_vec(),
-                deployer: deployer.clone(),
+                registry_contract: registry_contract.clone(),
             });
         }
     }
@@ -1132,7 +1121,7 @@ mod tests {
 
     #[test]
     fn batch_pending_claims_empty() {
-        assert!(batch_claims(vec![], &StacksAddress::burn_address(false)).is_empty());
+        assert!(batch_claims(vec![], &QualifiedContractIdentifier::transient()).is_empty());
     }
 
     #[test]
@@ -1156,7 +1145,7 @@ mod tests {
             claim(&sm_a, staker3.clone(), 3),
         ];
 
-        let batches = batch_claims(claims, &StacksAddress::burn_address(false));
+        let batches = batch_claims(claims, &QualifiedContractIdentifier::transient());
         assert_eq!(batches.len(), 2);
 
         let batch_a = batches
@@ -1191,7 +1180,7 @@ mod tests {
             })
             .collect();
 
-        let batches = batch_claims(claims.clone(), &StacksAddress::burn_address(false));
+        let batches = batch_claims(claims.clone(), &QualifiedContractIdentifier::transient());
         assert_eq!(batches.len(), 2);
         assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
         assert_eq!(batches[0].num_stakers(), MAX_STAKERS_LENGTH);
@@ -1218,7 +1207,7 @@ mod tests {
 
     #[test]
     fn batch_pending_withdrawals_empty() {
-        assert!(batch_withdrawals(vec![], &StacksAddress::burn_address(false)).is_empty());
+        assert!(batch_withdrawals(vec![], &QualifiedContractIdentifier::transient()).is_empty());
     }
 
     #[test]
@@ -1242,7 +1231,7 @@ mod tests {
             withdrawal(&sm_a, staker3.clone(), 3),
         ];
 
-        let batches = batch_withdrawals(withdrawals, &StacksAddress::burn_address(false));
+        let batches = batch_withdrawals(withdrawals, &QualifiedContractIdentifier::transient());
         assert_eq!(batches.len(), 2);
 
         let batch_a = batches
@@ -1285,7 +1274,10 @@ mod tests {
             })
             .collect();
 
-        let batches = batch_withdrawals(withdrawals.clone(), &StacksAddress::burn_address(false));
+        let batches = batch_withdrawals(
+            withdrawals.clone(),
+            &QualifiedContractIdentifier::transient(),
+        );
         assert_eq!(batches.len(), 2);
         assert!(batches.iter().all(|batch| batch.signer_manager() == &sm));
 

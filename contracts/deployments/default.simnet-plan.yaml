@@ -77,19 +77,14 @@ plan:
   - id: 1
     transactions:
     - transaction-type: emulated-contract-publish
-      contract-name: reward-claim-traits
+      contract-name: reward-claim-registry
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-      path: contracts/reward-claim-traits.clar
+      path: contracts/reward-claim-registry.clar
       clarity-version: 6
     - transaction-type: emulated-contract-publish
       contract-name: mock-signer-manager
       emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
       path: contracts/mock-signer-manager.clar
-      clarity-version: 6
-    - transaction-type: emulated-contract-publish
-      contract-name: reward-claim-registry
-      emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-      path: contracts/reward-claim-registry.clar
       clarity-version: 6
     - transaction-type: emulated-contract-publish
       contract-name: malicious-signer-manager

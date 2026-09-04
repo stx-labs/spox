@@ -4,7 +4,7 @@
 ;; this principal, leave get-earned > 0, and inject failures from claim-rewards
 ;; and/or claim-staker-rewards independently.
 
-(impl-trait .reward-claim-traits.reward-claim-signer-manager-trait)
+(impl-trait .reward-claim-registry.reward-claim-signer-manager-trait)
 (impl-trait 'ST000000000000000000002AMW42H.pox-5.signer-manager-trait)
 (use-trait signer-manager-trait 'ST000000000000000000002AMW42H.pox-5.signer-manager-trait)
 

@@ -11,6 +11,7 @@ use clarity::types::chainstate::BlockHeaderHash;
 use clarity::types::chainstate::ConsensusHash;
 use clarity::types::chainstate::StacksAddress;
 use clarity::types::chainstate::StacksBlockId;
+use clarity::vm::types::StandardPrincipalData;
 use clarity::vm::types::{BuffData, SequenceData};
 use clarity::vm::{ClarityName, ContractName, Value};
 use reqwest::header::AUTHORIZATION;
@@ -262,10 +263,10 @@ impl StacksClient {
     #[tracing::instrument(skip_all)]
     pub async fn call_read(
         &self,
-        contract_principal: &StacksAddress,
+        contract_principal: &StandardPrincipalData,
         contract_name: &ContractName,
         fn_name: &ClarityName,
-        sender: &StacksAddress,
+        sender: &StandardPrincipalData,
         arguments: &[Value],
         chain_tip: Option<&StacksBlockId>,
     ) -> Result<Value, Error> {
