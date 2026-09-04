@@ -564,6 +564,28 @@ export function stakeFor(staker: string, amount: bigint, numCycles: bigint) {
   );
 }
 
+/** Switch a live stake to a different signer-manager via pox-5 `stake-update`. */
+export function stakeUpdate(
+  staker: string,
+  newSignerManager: string,
+  oldSignerManager: string,
+  cyclesToExtend = 0n,
+  amountIncrease = 0n,
+) {
+  return simnet.callPublicFn(
+    POX5,
+    "stake-update",
+    [
+      Cl.principal(newSignerManager),
+      Cl.principal(oldSignerManager),
+      Cl.uint(cyclesToExtend),
+      Cl.uint(amountIncrease),
+      Cl.none(),
+    ],
+    staker,
+  );
+}
+
 /**
  * Fund pox-5 with sBTC for `rewardCycle`, advance to that cycle's distribution
  * boundary, and run pox-5 calculate-rewards -- but NOT the signer-manager
@@ -731,6 +753,15 @@ export function getRegistration(staker: string, signerManager: string) {
     "reward-claim-registry",
     "get-registration",
     [Cl.principal(staker), Cl.principal(signerManager)],
+    deployer,
+  ).result;
+}
+
+export function getMaxProcessedDistribution(staker: string) {
+  return simnet.callReadOnlyFn(
+    "reward-claim-registry",
+    "get-max-processed-distribution",
+    [Cl.principal(staker)],
     deployer,
   ).result;
 }
