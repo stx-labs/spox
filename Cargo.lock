@@ -356,9 +356,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 [[package]]
 name = "clarity"
 version = "0.0.1"
-source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
 dependencies = [
- "clarity-types",
+ "clarity-types 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
  "integer-sqrt",
  "lazy_static",
  "regex",
@@ -368,7 +368,40 @@ dependencies = [
  "serde_json",
  "serde_stacker",
  "slog",
- "stacks-common",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
+]
+
+[[package]]
+name = "clarity"
+version = "0.0.1"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
+dependencies = [
+ "clarity-types 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5)",
+ "integer-sqrt",
+ "lazy_static",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_stacker",
+ "slog",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5)",
+]
+
+[[package]]
+name = "clarity-types"
+version = "0.0.1"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
+dependencies = [
+ "lazy_static",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "slog",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
+ "variant_count",
 ]
 
 [[package]]
@@ -378,12 +411,10 @@ source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790
 dependencies = [
  "lazy_static",
  "regex",
- "rusqlite",
  "serde",
  "serde_derive",
- "serde_json",
  "slog",
- "stacks-common",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5)",
 ]
 
 [[package]]
@@ -1488,12 +1519,12 @@ dependencies = [
 [[package]]
 name = "libstackerdb"
 version = "0.0.1"
-source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
 dependencies = [
- "clarity",
+ "clarity 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
  "serde",
  "sha2 0.10.9",
- "stacks-common",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
 ]
 
 [[package]]
@@ -1768,11 +1799,11 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 [[package]]
 name = "pox-locking"
 version = "2.4.0"
-source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
 dependencies = [
- "clarity",
+ "clarity 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
  "slog",
- "stacks-common",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
 ]
 
 [[package]]
@@ -2207,12 +2238,12 @@ version = "0.1.0"
 source = "git+https://github.com/stacks-sbtc/sbtc.git?rev=b2865dd9e63fb143c6b427c0c4a013233a52f283#b2865dd9e63fb143c6b427c0c4a013233a52f283"
 dependencies = [
  "bitcoin",
- "clarity",
+ "clarity 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5)",
  "rand 0.8.6",
  "secp256k1 0.29.1",
  "serde",
  "serde_json",
- "stacks-common",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5)",
  "thiserror 2.0.18",
 ]
 
@@ -2619,7 +2650,7 @@ dependencies = [
  "bitcoincore-rpc",
  "bitcoincore-rpc-json",
  "clap",
- "clarity",
+ "clarity 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
  "config",
  "emily-client",
  "lru",
@@ -2659,9 +2690,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "stacks-codec"
+version = "0.1.0"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
+dependencies = [
+ "clarity-types 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
+ "serde",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
+ "variant_count",
+]
+
+[[package]]
 name = "stacks-common"
 version = "0.0.1"
-source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
 dependencies = [
  "chrono",
  "curve25519-dalek",
@@ -2688,11 +2730,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "stackslib"
+name = "stacks-common"
 version = "0.0.1"
 source = "git+https://github.com/stacks-network/stacks-core?rev=1cba695b09690790b1220b0f5d149f70f78ddea5#1cba695b09690790b1220b0f5d149f70f78ddea5"
 dependencies = [
- "clarity",
+ "chrono",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "hashbrown 0.15.4",
+ "lazy_static",
+ "libsecp256k1",
+ "p256",
+ "ripemd",
+ "secp256k1 0.24.3",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha3",
+ "slog",
+ "slog-term",
+ "thiserror 1.0.69",
+ "toml 0.5.11",
+]
+
+[[package]]
+name = "stackslib"
+version = "0.0.1"
+source = "git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303#1b57c3fb6709ab927f9179ab6814f874c84f5303"
+dependencies = [
+ "clarity 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
  "ed25519-dalek",
  "lazy_static",
  "libstackerdb",
@@ -2706,13 +2773,15 @@ dependencies = [
  "regex",
  "ripemd",
  "rusqlite",
+ "secp256k1 0.24.3",
  "serde",
  "serde_derive",
  "serde_json",
  "sha2 0.10.9",
  "siphasher",
  "slog",
- "stacks-common",
+ "stacks-codec",
+ "stacks-common 0.0.1 (git+https://github.com/stacks-network/stacks-core?rev=1b57c3fb6709ab927f9179ab6814f874c84f5303)",
  "time",
  "toml 0.5.11",
  "url",
@@ -3174,6 +3243,17 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "variant_count"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17c13b28baa922722e35ded153b394d0247b4942b4ad54f85713a7de672cdf0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "vcpkg"

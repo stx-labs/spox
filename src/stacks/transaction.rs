@@ -19,18 +19,18 @@ const REWARD_CLAIM_TRAIT_CONTRACT: &str = "reward-claim-traits";
 
 /// This function creates a Trait identifier for the
 /// [`REWARD_CLAIM_TRAIT_NAME`] trait, once we know the issuer/deployer.
-pub fn make_trait_identifier(deployer: StacksAddress) -> TraitIdentifier {
-    TraitIdentifier {
-        name: ClarityName::from(REWARD_CLAIM_TRAIT_NAME),
+pub fn make_trait_identifier(deployer: StacksAddress) -> Box<TraitIdentifier> {
+    Box::new(TraitIdentifier {
+        name: ClarityName::from_literal(REWARD_CLAIM_TRAIT_NAME),
         contract_identifier: QualifiedContractIdentifier {
             issuer: StandardPrincipalData::from(deployer),
-            // The following From::from call is more dangerous than it
-            // appears. Under the hood it calls its TryFrom::try_from
-            // implementation and then unwrap them. We check that this
-            // is fine in our test.
-            name: ContractName::from(REWARD_CLAIM_TRAIT_CONTRACT),
+            // The ContractName::from_literal call is more dangerous than
+            // it appears. Under the hood it calls its TryFrom::try_from
+            // implementation and then unwrap them. We check that this is
+            // fine in our test.
+            name: ContractName::from_literal(REWARD_CLAIM_TRAIT_CONTRACT),
         },
-    }
+    })
 }
 
 /// A trait to ease construction of a contract call StacksTransaction.
@@ -47,12 +47,12 @@ pub trait IntoContractCall: Sized {
     fn into_tx_payload(self) -> TransactionPayload {
         let contract_call = TransactionContractCall {
             address: self.deployer_address().clone(),
-            // The following From::from calls are more dangerous than they
-            // appear. Under the hood they call their TryFrom::try_from
-            // implementation and then unwrap them(!). We check that this
-            // is fine in our test.
-            function_name: ClarityName::from(Self::FUNCTION_NAME),
-            contract_name: ContractName::from(Self::CONTRACT_NAME),
+            // The ContractName::from_literal call is more dangerous than
+            // it appears. Under the hood it calls its TryFrom::try_from
+            // implementation and then unwrap them. We check that this is
+            // fine in our test.
+            function_name: ClarityName::from_literal(Self::FUNCTION_NAME),
+            contract_name: ContractName::from_literal(Self::CONTRACT_NAME),
             function_args: self.into_contract_args(),
         };
         TransactionPayload::ContractCall(contract_call)

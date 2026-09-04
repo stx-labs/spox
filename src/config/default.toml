@@ -92,6 +92,12 @@ reclaim_script = "75206c44dfe47941b0271c642c549d9a763afce7c6b0495c72f1a32c2f0989
 # Environment: SPOX_STACKS__RPC_ENDPOINT
 rpc_endpoint = "http://127.0.0.1:20443"
 
+# Token sent as the Authorization header for stacks-core privileged RPC.
+#
+# Required: true (when the this stanza is present)
+# Environment: SPOX_STACKS__AUTH_TOKEN
+auth_token = "12345"
+
 # The address of the deployer of the sBTC smart contracts.
 #
 # Required: true (when this stanza is present)

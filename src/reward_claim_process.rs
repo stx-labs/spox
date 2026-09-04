@@ -73,7 +73,7 @@ pub async fn process_reward_claims(mut rx: mpsc::Receiver<BlockRef>, context: Co
 /// 2. Submits a process-reward-claims contract call for each batch of
 ///    claims, where a batch is a group of at most 100 stakers who are
 ///    associated with the same signer-manager.
-#[instrument(skip(state))]
+#[instrument(skip_all, fields(bitcoin_block_height = %chain_tip.block_height, bitcoin_block_hash = %chain_tip.block_hash))]
 async fn process_claims(state: &RewardClaimState, chain_tip: &BlockRef) -> Result<(), Error> {
     let batches = state.registry.get_pending_claim_batches().await?;
     if batches.is_empty() {
@@ -121,7 +121,7 @@ async fn process_claims(state: &RewardClaimState, chain_tip: &BlockRef) -> Resul
 /// 2. Submits a settle-pending-withdrawals contract call for each batch of
 ///    withdrawals, where a batch is a group of at most 100 withdrawals who
 ///    are associated with the same signer-manager.
-#[instrument(skip(state))]
+#[instrument(skip_all, fields(bitcoin_block_height = %chain_tip.block_height, bitcoin_block_hash = %chain_tip.block_hash))]
 async fn process_withdrawals(state: &RewardClaimState, chain_tip: &BlockRef) -> Result<(), Error> {
     let batches = state.registry.get_pending_withdrawal_batches().await?;
     if batches.is_empty() {
@@ -185,7 +185,7 @@ impl RewardClaimState {
         };
 
         // Let's go and get the current chain id.
-        let client = StacksClient::new(stacks.rpc_endpoint.clone())?;
+        let client = StacksClient::new(stacks.rpc_endpoint.clone(), &stacks.auth_token)?;
         let info = client.get_node_info().await?;
         let wallet = StacksWallet::new(config.private_key, info.chain_id, 0);
 

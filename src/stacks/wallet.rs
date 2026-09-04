@@ -114,7 +114,9 @@ impl StacksWallet {
             chain_id: self.chain_id,
             auth: TransactionAuth::Standard(Singlesig(auth)),
             anchor_mode: TransactionAnchorMode::Any,
-            post_condition_mode: TransactionPostConditionMode::Deny,
+            // Uses originator post-condition mode to deny asset movement for our
+            // assets allow it for all other principals.
+            post_condition_mode: TransactionPostConditionMode::Originator,
             post_conditions: Vec::new(),
             payload,
         };
@@ -188,6 +190,7 @@ impl RecoverableEcdsaSignature for RecoverableSignature {
 #[cfg(test)]
 mod tests {
     use blockstack_lib::chainstate::stacks::TokenTransferMemo;
+    use blockstack_lib::chainstate::stacks::TransactionAuthVerificationMode;
     use blockstack_lib::chainstate::stacks::TransactionPayload;
     use blockstack_lib::core::CHAIN_ID_TESTNET;
     use clarity::types::chainstate::StacksAddress;
@@ -226,12 +229,18 @@ mod tests {
 
     #[test]
     fn sign_tx_produces_verifiable_transaction() {
+        use TransactionAuthVerificationMode::EnforceLowS;
         let wallet = StacksWallet::new(test_secret_key(), CHAIN_ID_TESTNET, 0);
         let payload = token_transfer_payload(wallet.address());
 
         let tx = wallet.sign_tx(payload, 1000);
-        assert!(tx.verify().is_ok());
+        assert!(tx.verify(EnforceLowS).is_ok());
         assert_eq!(tx.chain_id, CHAIN_ID_TESTNET);
+        assert_eq!(
+            tx.post_condition_mode,
+            TransactionPostConditionMode::Originator
+        );
+        assert!(tx.post_conditions.is_empty());
         assert_eq!(wallet.nonce(), 0);
     }
 

@@ -11,8 +11,8 @@ testing = []
 sbtc = { git = "https://github.com/stacks-sbtc/sbtc.git", rev = "b2865dd9e63fb143c6b427c0c4a013233a52f283", default-features = false }
 emily-client = { git = "https://github.com/stacks-sbtc/sbtc.git", rev = "b2865dd9e63fb143c6b427c0c4a013233a52f283", default-features = false }
 
-clarity = { git = "https://github.com/stacks-network/stacks-core", rev = "1cba695b09690790b1220b0f5d149f70f78ddea5", default-features = false }
-stackslib = { git = "https://github.com/stacks-network/stacks-core", rev = "1cba695b09690790b1220b0f5d149f70f78ddea5", default-features = false }
+clarity = { git = "https://github.com/stacks-network/stacks-core", rev = "1b57c3fb6709ab927f9179ab6814f874c84f5303", default-features = false }
+stackslib = { git = "https://github.com/stacks-network/stacks-core", rev = "1b57c3fb6709ab927f9179ab6814f874c84f5303", default-features = false }
 
 bitcoin = { version = "0.32.8", default-features = false, features = ["serde", "rand-std"] }
 bitcoincore-rpc = { version = "0.19.0", default-features = false }

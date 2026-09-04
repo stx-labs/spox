@@ -75,7 +75,7 @@ impl Context {
         };
 
         // Let's go and get the current chain id.
-        let client = StacksClient::new(stacks.rpc_endpoint.clone())?;
+        let client = StacksClient::new(stacks.rpc_endpoint.clone(), &stacks.auth_token)?;
         let info = client.get_node_info().await?;
         Ok(StacksWallet::new(claims.private_key, info.chain_id, 0))
     }

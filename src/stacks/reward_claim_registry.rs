@@ -39,8 +39,14 @@ pub const MAX_STAKERS_LENGTH: usize = 100;
 /// than 500 bytes. We also exercised this code in the contract-call tests.
 static TUPLE_WITHDRAWAL_ITEM_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
     TupleTypeSignature::try_from(BTreeMap::from([
-        (ClarityName::from("staker"), TypeSignature::PrincipalType),
-        (ClarityName::from("request-id"), TypeSignature::UIntType),
+        (
+            ClarityName::from_literal("staker"),
+            TypeSignature::PrincipalType,
+        ),
+        (
+            ClarityName::from_literal("request-id"),
+            TypeSignature::UIntType,
+        ),
     ]))
     .unwrap()
 });
@@ -51,12 +57,18 @@ static TUPLE_WITHDRAWAL_ITEM_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock:
 /// the docstring for [`TUPLE_WITHDRAWAL_ITEM_SIGNATURE`].
 static TUPLE_WITHDRAWAL_KEY_SIGNATURE: LazyLock<TupleTypeSignature> = LazyLock::new(|| {
     TupleTypeSignature::try_from(BTreeMap::from([
-        (ClarityName::from("staker"), TypeSignature::PrincipalType),
         (
-            ClarityName::from("signer-manager"),
+            ClarityName::from_literal("staker"),
             TypeSignature::PrincipalType,
         ),
-        (ClarityName::from("request-id"), TypeSignature::UIntType),
+        (
+            ClarityName::from_literal("signer-manager"),
+            TypeSignature::PrincipalType,
+        ),
+        (
+            ClarityName::from_literal("request-id"),
+            TypeSignature::UIntType,
+        ),
     ]))
     .unwrap()
 });
@@ -135,13 +147,16 @@ impl WithdrawalKey {
     /// Build a withdrawal cursor tuple from its fields.
     pub fn new(staker: PrincipalData, signer_manager: PrincipalData, request_id: u128) -> Self {
         let data_map = BTreeMap::from([
-            (ClarityName::from("staker"), ClarityValue::Principal(staker)),
             (
-                ClarityName::from("signer-manager"),
+                ClarityName::from_literal("staker"),
+                ClarityValue::Principal(staker),
+            ),
+            (
+                ClarityName::from_literal("signer-manager"),
                 ClarityValue::Principal(signer_manager),
             ),
             (
-                ClarityName::from("request-id"),
+                ClarityName::from_literal("request-id"),
                 ClarityValue::UInt(request_id),
             ),
         ]);
@@ -164,9 +179,12 @@ impl WithdrawalItem {
     /// Build a withdrawal item from its fields.
     pub fn new(staker: PrincipalData, request_id: u128) -> Self {
         let data_map = BTreeMap::from([
-            (ClarityName::from("staker"), ClarityValue::Principal(staker)),
             (
-                ClarityName::from("request-id"),
+                ClarityName::from_literal("staker"),
+                ClarityValue::Principal(staker),
+            ),
+            (
+                ClarityName::from_literal("request-id"),
                 ClarityValue::UInt(request_id),
             ),
         ]);
@@ -401,11 +419,11 @@ impl RewardClaimRegistry {
             Some(key) => {
                 let tuple = TupleData::from_data(vec![
                     (
-                        ClarityName::from("staker"),
+                        ClarityName::from_literal("staker"),
                         ClarityValue::Principal(key.staker.clone()),
                     ),
                     (
-                        ClarityName::from("signer-manager"),
+                        ClarityName::from_literal("signer-manager"),
                         ClarityValue::Principal(key.signer_manager.clone()),
                     ),
                 ])
@@ -421,7 +439,7 @@ impl RewardClaimRegistry {
             .call_read(
                 &self.deployer,
                 &self.contract_name,
-                &ClarityName::from("get-pending-claims"),
+                &ClarityName::from_literal("get-pending-claims"),
                 &self.deployer,
                 &[cursor_arg],
                 chain_tip,
@@ -487,7 +505,7 @@ impl RewardClaimRegistry {
             .call_read(
                 &self.deployer,
                 &self.contract_name,
-                &ClarityName::from("get-pending-withdrawals"),
+                &ClarityName::from_literal("get-pending-withdrawals"),
                 &self.deployer,
                 &[cursor_arg],
                 chain_tip,
@@ -729,19 +747,19 @@ mod tests {
                 .map(|index| Box::new(ClarityValue::UInt(index)));
             let tuple_entries = vec![
                 (
-                    ClarityName::from("signer-manager"),
+                    ClarityName::from_literal("signer-manager"),
                     ClarityValue::Principal(PrincipalData::Contract(value.signer_manager.clone())),
                 ),
                 (
-                    ClarityName::from("staker"),
+                    ClarityName::from_literal("staker"),
                     ClarityValue::Principal(value.staker.clone()),
                 ),
                 (
-                    ClarityName::from("bond-index"),
+                    ClarityName::from_literal("bond-index"),
                     ClarityValue::Optional(OptionalData { data: bond_index }),
                 ),
                 (
-                    ClarityName::from("reward-cycle"),
+                    ClarityName::from_literal("reward-cycle"),
                     ClarityValue::UInt(value.reward_cycle),
                 ),
             ];
@@ -753,11 +771,11 @@ mod tests {
         fn from(value: &RegistrationKey) -> Self {
             let tuple_entries = vec![
                 (
-                    ClarityName::from("staker"),
+                    ClarityName::from_literal("staker"),
                     ClarityValue::Principal(value.staker.clone()),
                 ),
                 (
-                    ClarityName::from("signer-manager"),
+                    ClarityName::from_literal("signer-manager"),
                     ClarityValue::Principal(value.signer_manager.clone()),
                 ),
             ];
@@ -769,15 +787,15 @@ mod tests {
         fn from(value: &PendingWithdrawal) -> Self {
             let tuple_entries = vec![
                 (
-                    ClarityName::from("signer-manager"),
+                    ClarityName::from_literal("signer-manager"),
                     ClarityValue::Principal(PrincipalData::Contract(value.signer_manager.clone())),
                 ),
                 (
-                    ClarityName::from("staker"),
+                    ClarityName::from_literal("staker"),
                     ClarityValue::Principal(value.item.staker().clone()),
                 ),
                 (
-                    ClarityName::from("request-id"),
+                    ClarityName::from_literal("request-id"),
                     ClarityValue::UInt(value.item.request_id()),
                 ),
             ];
@@ -800,10 +818,10 @@ mod tests {
         let page = ClarityValue::Tuple(
             TupleData::from_data(vec![
                 (
-                    ClarityName::from("rows"),
+                    ClarityName::from_literal("rows"),
                     ClarityValue::cons_list_unsanitized(rows).unwrap(),
                 ),
-                (ClarityName::from("next"), next_value),
+                (ClarityName::from_literal("next"), next_value),
             ])
             .unwrap(),
         );
@@ -822,10 +840,10 @@ mod tests {
         let page = ClarityValue::Tuple(
             TupleData::from_data(vec![
                 (
-                    ClarityName::from("rows"),
+                    ClarityName::from_literal("rows"),
                     ClarityValue::cons_list_unsanitized(rows).unwrap(),
                 ),
-                (ClarityName::from("next"), next_value),
+                (ClarityName::from_literal("next"), next_value),
             ])
             .unwrap(),
         );
@@ -872,7 +890,7 @@ mod tests {
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip=latest",
+                "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip=latest",
             )
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "arguments": [ClarityValue::none().serialize_to_hex().unwrap()]
@@ -884,7 +902,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -940,7 +958,7 @@ mod tests {
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip=latest",
+                "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip=latest",
             )
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "arguments": [cursor_hex]
@@ -952,7 +970,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -988,7 +1006,7 @@ mod tests {
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip=latest",
+                "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip=latest",
             )
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -997,7 +1015,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -1060,7 +1078,7 @@ mod tests {
             .create();
 
         let path = format!(
-            "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip={tip}"
+            "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-claims?tip={tip}"
         );
 
         let empty_with_next = stacks_node_server
@@ -1094,7 +1112,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -1304,7 +1322,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let path = "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest";
+        let path = "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest";
         let mut stacks_node_server = mockito::Server::new_async().await;
         let mock = stacks_node_server
             .mock("POST", path)
@@ -1318,7 +1336,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -1369,7 +1387,7 @@ mod tests {
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest",
+                "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest",
             )
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "arguments": [cursor_hex]
@@ -1381,7 +1399,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -1415,7 +1433,7 @@ mod tests {
         let mock = stacks_node_server
             .mock(
                 "POST",
-                "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest",
+                "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip=latest",
             )
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -1424,7 +1442,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(
@@ -1493,7 +1511,7 @@ mod tests {
             .create();
 
         let path = format!(
-            "/v2/contracts/call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip={tip}"
+            "/v3/contracts/fast-call-read/ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/reward-claim-registry/get-pending-withdrawals?tip={tip}"
         );
 
         let empty_with_next = stacks_node_server
@@ -1529,7 +1547,7 @@ mod tests {
             .create();
 
         let client_url = url::Url::parse(stacks_node_server.url().as_str()).unwrap();
-        let client = StacksClient::new(client_url).unwrap();
+        let client = StacksClient::new(client_url, "").unwrap();
 
         let registry = RewardClaimRegistry::new(
             QualifiedContractIdentifier::parse(

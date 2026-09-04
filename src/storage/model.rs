@@ -1,7 +1,9 @@
 //! Data models used in spox.
 
 use bitcoin::ScriptBuf;
+use clarity::vm::types::PrincipalData;
 use sbtc::deposits::{DepositScriptInputs, ReclaimScriptInputs};
+use serde::de::DeserializeOwned;
 
 use crate::{config::MonitoredDepositConfig, error::Error};
 
@@ -35,6 +37,15 @@ impl MonitoredDeposit {
     }
 }
 
+/// Convert a principal into the type expected by the sbtc crate.
+pub fn as_principal_data<T>(principal: &PrincipalData) -> Result<T, Error>
+where
+    T: DeserializeOwned,
+{
+    let value = serde_json::to_value(principal).map_err(Error::PrincipalDataSerdeJson)?;
+    serde_json::from_value(value).map_err(Error::PrincipalDataSerdeJson)
+}
+
 impl TryFrom<(&String, &MonitoredDepositConfig)> for MonitoredDeposit {
     type Error = Error;
 
@@ -44,7 +55,7 @@ impl TryFrom<(&String, &MonitoredDepositConfig)> for MonitoredDeposit {
             source: MonitoredDepositSource::Config(alias.clone()),
             deposit_script_inputs: DepositScriptInputs {
                 signers_public_key: deposit.signers_xonly,
-                recipient: deposit.recipient,
+                recipient: as_principal_data(&deposit.recipient)?,
                 max_fee: deposit.max_fee,
             },
             reclaim_script_inputs: ReclaimScriptInputs::try_new(
