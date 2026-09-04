@@ -619,7 +619,7 @@
 ;; registrations.
 ;;
 ;; Parameters:
-;;   cursor  none to start at the head, or (some key) to start at the 
+;;   cursor  none to start at the head, or (some key) to start at the
 ;;           supplied key.
 ;;
 ;; Returns:
@@ -917,7 +917,7 @@
 )
 
 ;; Register up to 50 stakers under the same signer-manager in one call.
-;; Runs register-for-claims-impl per entry. 
+;; Runs register-for-claims-impl per entry.
 ;;
 ;; Note that a failure for any entry does not abort the batch and print
 ;; events are emitted for both successful and failed registrations.
