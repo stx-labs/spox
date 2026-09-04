@@ -9,6 +9,7 @@ use crate::config::Settings;
 use crate::error::Error;
 use crate::stacks::node::StacksClient;
 use crate::stacks::registry::DepositAddressRegistry;
+use crate::stacks::wallet::StacksWallet;
 use crate::storage::memory::{SharedStore, Store};
 
 /// Application context
@@ -58,6 +59,27 @@ impl TryFrom<&Settings> for Context {
 }
 
 impl Context {
+    /// Construct a Stacks wallet given the information in the config.
+    ///
+    /// # Note
+    ///
+    /// This function reaches out to the stacks node to get the current
+    /// chain ID.
+    pub async fn wallet(&self) -> Result<StacksWallet, Error> {
+        let config = &self.settings;
+        let Some(claims) = config.reward_claims.as_ref() else {
+            return Err(Error::MissingRewardClaimsConfig);
+        };
+        let Some(stacks) = config.stacks.as_ref() else {
+            return Err(Error::MissingStacksConfig);
+        };
+
+        // Let's go and get the current chain id.
+        let client = StacksClient::new(stacks.rpc_endpoint.clone(), &stacks.auth_token)?;
+        let info = client.get_node_info().await?;
+        Ok(StacksWallet::new(claims.private_key, info.chain_id, 0))
+    }
+
     /// Get a reference to the Bitcoin client
     pub fn bitcoin_client(&self) -> &BitcoinCoreClient {
         &self.bitcoin_client
