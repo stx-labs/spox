@@ -10,3 +10,4 @@ rescan_timestamp = 1767225600 # Jan 1 2026
 [stacks]
 rpc_endpoint = "http://127.0.0.1:20443"
 sbtc_deployer = "SN3R84XZYA63QS28932XQF3G1J8R9PC3W76P9CSQS"
+auth_token = "12345"
