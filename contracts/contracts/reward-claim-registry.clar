@@ -59,14 +59,14 @@
 
 ;; No registration for this staker and signer-manager combination
 (define-constant ERR_NOT_REGISTERED (err u600))
-;; The registration fee is too small to buy even one claim installment
-(define-constant ERR_INSUFFICIENT_FEE (err u601))
+;; The num-claims passed in during registration exceeds MAX_CLAIM_INSTALLMENTS
+(define-constant ERR_MAX_NUM_CLAIMS_EXCEEDED (err u601))
 ;; The caller is not an admin to an admin only function
 (define-constant ERR_NOT_ADMIN (err u602))
 ;; The staker has no active pox-5 position under this signer
 (define-constant ERR_NO_CURRENT_POSITION (err u603))
-;; The registration fee must be greater than zero
-(define-constant ERR_ZERO_FEE (err u604))
+;; The num-claims passed in during registration must be greater than zero
+(define-constant ERR_ZERO_NUM_CLAIMS (err u604))
 ;; Nothing new to claim yet: next-claim-distribution has not fully elapsed
 (define-constant ERR_ALREADY_CLAIMED (err u605))
 ;; pox-5 calculate-rewards has not covered this registration's claim distribution
@@ -238,16 +238,6 @@
     signer-manager: principal,
     request-id: uint,
 }) none)
-
-(define-private (min-uint
-        (left uint)
-        (right uint)
-    )
-    (if (<= left right)
-        left
-        right
-    )
-)
 
 ;; Step size in distribution cycles: two when claiming at most once per reward
 ;; cycle, otherwise one so up to two claims per reward cycle are possible.
@@ -763,15 +753,15 @@
 ;; prepaid-ustx balances are unchanged.
 ;;
 ;; Parameters:
-;;   new-fee  The new fee-per-claim in micro-STX. Must be greater than zero.
+;;   new-fee  The new fee-per-claim in micro-STX.
 ;;
 ;; Returns:
-;;   ok true on success, or an error if the caller is not an admin or new-fee
-;;   is zero.
+;;   ok true on success, or an error if the caller is not an admin.
+;;
+;; #[allow(unchecked_data)]
 (define-public (set-fee-per-claim (new-fee uint))
     (begin
         (try! (authorize-admin))
-        (asserts! (> new-fee u0) ERR_ZERO_FEE)
         (ok (var-set fee-per-claim new-fee))
     )
 )
@@ -799,7 +789,7 @@
     )
 )
 
-;; Register a staker for automated reward claims. 
+;; Register a staker for automated reward claims.
 ;;
 ;; See register-for-claims for documentation.
 (define-private (register-for-claims-impl
@@ -807,18 +797,17 @@
         (signer-manager principal)
         (start-reward-cycle uint)
         (one-claim-per-reward-cycle bool)
-        (fee uint)
+        (num-claims uint)
     )
     (let (
-            (price (var-get fee-per-claim))
-            (num-claims (min-uint (/ fee price) MAX_CLAIM_INSTALLMENTS))
             (key {
                 staker: staker,
                 signer-manager: signer-manager,
             })
             (position (unwrap! (get-position staker) ERR_NO_CURRENT_POSITION))
         )
-        (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
+        (asserts! (> num-claims u0) ERR_ZERO_NUM_CLAIMS)
+        (asserts! (<= num-claims MAX_CLAIM_INSTALLMENTS) ERR_MAX_NUM_CLAIMS_EXCEEDED)
         (asserts! (is-none (map-get? registrations key)) ERR_ALREADY_REGISTERED)
         (asserts! (is-eq signer-manager (get signer position)) ERR_SIGNER_MANAGER_MISMATCH)
         (asserts! (>= start-reward-cycle (get first-reward-cycle position))
@@ -857,7 +846,7 @@
             staker: principal,
             start-reward-cycle: uint,
             one-claim-per-reward-cycle: bool,
-            fee: uint,
+            num-claims: uint,
         })
         (state {
             signer: principal,
@@ -865,9 +854,9 @@
         })
     )
     (match (register-for-claims-impl (get staker entry) (get signer state) (get start-reward-cycle entry)
-        (get one-claim-per-reward-cycle entry) (get fee entry)
+        (get one-claim-per-reward-cycle entry) (get num-claims entry)
     )
-        num-claims (merge state { registered: (+ (get registered state) u1) })
+        claims (merge state { registered: (+ (get registered state) u1) })
         err-code (begin
             (print {
                 topic: "register-for-claims-skipped",
@@ -875,7 +864,7 @@
                 signer-manager: (get signer state),
                 start-reward-cycle: (get start-reward-cycle entry),
                 one-claim-per-reward-cycle: (get one-claim-per-reward-cycle entry),
-                fee: (get fee entry),
+                num-claims: (get num-claims entry),
                 error: err-code,
             })
             state
@@ -888,9 +877,10 @@
 ;; add-claims. Admins pay no fee. The staker must currently be staking in
 ;; pox-5. The active bond-index, if any, is looked up from pox-5; callers do
 ;; not pass it. Schedule seeds next-claim-distribution from start-reward-cycle.
-;; Fee STX is escrowed from tx-sender and burned one installment at a time
-;; when claims advance. Fails if this staker and signer-manager pair is already
-;; registered; use add-claims to buy more installments.
+;; The escrowed STX amount is num-claims * fee-per-claim from tx-sender, which
+;; is burned one installment at a time when claims are made. Fails if this
+;; staker and signer-manager pair is already registered; use add-claims to buy
+;; more installments.
 ;;
 ;; Parameters:
 ;;   staker                      The principal being registered.
@@ -905,29 +895,26 @@
 ;;                               false, up to two claims per reward cycle: step
 ;;                               of one, seeded on the first half, with catch-up
 ;;                               when a reward cycle is fully past.
-;;   fee                         STX paid by tx-sender. Buys the minimum of
-;;                               fee divided by fee-per-claim and
-;;                               MAX_CLAIM_INSTALLMENTS.
-;;                               Only the used portion is escrowed; any remainder
-;;                               stays with the sender. Admins escrow nothing.
+;;   num-claims                  The number of claim installments to purchase. The
+;;                               escrow amount is num-claims * fee-per-claim. Admins
+;;                               escrow nothing.
 ;;
 ;; Returns:
-;;   ok with the number of claim installments bought on this call, or an error
-;;   if fee buys no claims, a registration already exists, the position is
-;;   missing or under a different signer, or start-reward-cycle is before the
-;;   position's first-reward-cycle.
+;;   ok with num-claims, or an error if num-claims is zero or too large, a
+;;   registration already exists, the stake does not exist or exists under a different
+;;   signer, or start-reward-cycle is before the stake's first-reward-cycle.
 (define-public (register-for-claims
         (staker principal)
         (signer-manager <reward-claim-signer-manager-trait>)
         (start-reward-cycle uint)
         (one-claim-per-reward-cycle bool)
-        (fee uint)
+        (num-claims uint)
     )
     (begin
         ;; ensure no reentrancy through signer-manager trait calls
         (try! (validate-no-reentrancy))
         (register-for-claims-impl staker (contract-of signer-manager) start-reward-cycle
-            one-claim-per-reward-cycle fee
+            one-claim-per-reward-cycle num-claims
         )
     )
 )
@@ -950,7 +937,7 @@
                 staker: principal,
                 start-reward-cycle: uint,
                 one-claim-per-reward-cycle: bool,
-                fee: uint,
+                num-claims: uint,
             }
         ))
     )
@@ -968,38 +955,33 @@
 
 ;; Buy additional claim installments for an existing registration. Only the
 ;; stored sponsor may call this. Does not change next-claim-distribution,
-;; one-claim-per-reward-cycle, bond-index, or sponsor. Fee STX is escrowed
-;; and burned later when a claim is processed.
+;; one-claim-per-reward-cycle, bond-index, or sponsor. Escrow is
+;; num-claims * fee-per-claim, burned later when a claim is processed.
 ;;
 ;; Parameters:
 ;;   staker          The staker on the registration key.
 ;;   signer-manager  The signer-manager principal on the registration key.
-;;   fee             STX paid by tx-sender. Buys the minimum of fee divided by
-;;                   fee-per-claim and MAX_CLAIM_INSTALLMENTS. Only the used portion
-;;                   is escrowed; any remainder stays with the sender. Admins
-;;                   escrow nothing.
+;;   num-claims      The number of claim installments to add.
 ;;
 ;; Returns:
-;;   ok with the number of claim installments added on this call, or an error
-;;   if tx-sender is not the sponsor, fee buys no claims, or no registration
-;;   exists for this key.
+;;   ok with num-claims, or an error if tx-sender is not the sponsor,
+;;   num-claims is zero or too large, or no registration exists for this key.
 ;;
 ;; #[allow(unchecked_data)]
 (define-public (add-claims
         (staker principal)
         (signer-manager principal)
-        (fee uint)
+        (num-claims uint)
     )
     (let (
-            (price (var-get fee-per-claim))
-            (num-claims (min-uint (/ fee price) MAX_CLAIM_INSTALLMENTS))
             (key {
                 staker: staker,
                 signer-manager: signer-manager,
             })
         )
         (try! (validate-no-reentrancy))
-        (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
+        (asserts! (> num-claims u0) ERR_ZERO_NUM_CLAIMS)
+        (asserts! (<= num-claims MAX_CLAIM_INSTALLMENTS) ERR_MAX_NUM_CLAIMS_EXCEEDED)
         ;; Fail before escrowing if this key is not registered or tx-sender is not the sponsor.
         (let ((existing (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED)))
             (asserts! (is-eq tx-sender (get sponsor existing)) ERR_UNAUTHORIZED)

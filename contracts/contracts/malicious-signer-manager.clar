@@ -107,7 +107,7 @@
                 (match (contract-call? .reward-claim-registry add-claims
                     (var-get reenter-staker)
                     current-contract
-                    u100000
+                    u10
                   )
                   ok-v (var-set last-reenter-error none)
                   err-v (note-reenter-err err-v)
@@ -118,7 +118,7 @@
                       .mock-signer-manager
                       u1
                       true
-                      u100000
+                      u10
                     )
                     ok-v (var-set last-reenter-error none)
                     err-v (note-reenter-err err-v)

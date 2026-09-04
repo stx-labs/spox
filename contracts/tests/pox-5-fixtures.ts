@@ -74,10 +74,10 @@ export const REENTER_REGISTER = 6n;
 
 // reward-claim-registry error codes
 export const ERR_NOT_REGISTERED = 600n;
-export const ERR_INSUFFICIENT_FEE = 601n;
+export const ERR_MAX_NUM_CLAIMS_EXCEEDED = 601n;
 export const ERR_NOT_ADMIN = 602n;
 export const ERR_NO_CURRENT_POSITION = 603n;
-export const ERR_ZERO_FEE = 604n;
+export const ERR_ZERO_NUM_CLAIMS = 604n;
 export const ERR_ALREADY_CLAIMED = 605n;
 export const ERR_REWARDS_NOT_CALCULATED = 606n;
 export const ERR_UNKNOWN_PENDING_WITHDRAWAL = 607n;
@@ -618,7 +618,7 @@ export function getEarned(
 
 export function registerForClaims(
   staker: string,
-  fee: bigint,
+  numClaims: bigint,
   sender: string,
   signerManager: string,
   startRewardCycle: bigint,
@@ -632,7 +632,7 @@ export function registerForClaims(
       Cl.principal(signerManager),
       Cl.uint(startRewardCycle),
       Cl.bool(oneClaimPerRewardCycle),
-      Cl.uint(fee),
+      Cl.uint(numClaims),
     ],
     sender,
   );
@@ -642,7 +642,7 @@ export type RegisterManyEntry = {
   staker: string;
   startRewardCycle: bigint;
   oneClaimPerRewardCycle: boolean;
-  fee: bigint;
+  numClaims: bigint;
 };
 
 export function registerManyForClaims(
@@ -661,7 +661,7 @@ export function registerManyForClaims(
             staker: Cl.principal(entry.staker),
             "start-reward-cycle": Cl.uint(entry.startRewardCycle),
             "one-claim-per-reward-cycle": Cl.bool(entry.oneClaimPerRewardCycle),
-            fee: Cl.uint(entry.fee),
+            "num-claims": Cl.uint(entry.numClaims),
           }),
         ),
       ),
@@ -672,14 +672,14 @@ export function registerManyForClaims(
 
 export function addClaims(
   staker: string,
-  fee: bigint,
+  numClaims: bigint,
   sender: string,
   signerManager: string,
 ) {
   return simnet.callPublicFn(
     "reward-claim-registry",
     "add-claims",
-    [Cl.principal(staker), Cl.principal(signerManager), Cl.uint(fee)],
+    [Cl.principal(staker), Cl.principal(signerManager), Cl.uint(numClaims)],
     sender,
   );
 }
