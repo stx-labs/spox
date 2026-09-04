@@ -4,15 +4,15 @@ Permissionless keeper contract that registers PoX-5 stakers for automated reward
 
 ## Invariants
 
-- **Pending gate.** No claim runs unless there are a positive number registered `remaining-cycles`, `next-claim-distribution` is less than `current-distribution-cycle`, and pox-5 `calculate-rewards` has covered that claim distribution.
+- **Pending gate.** No claim runs unless there are a positive number registered `remaining-claims`, `next-claim-distribution` is less than `current-distribution-cycle`, and pox-5 `calculate-rewards` has covered that claim distribution.
 - **Cadence is chosen at registration.**
 - **Start cycle is explicit.** `start-reward-cycle` must be greater than or equal to the staker's `first-reward-cycle`.
 - **Catch-up is allowed.** When many distributions are already past, keepers may call `process-reward-claim` repeatedly.
-- **Always advance.** A failed `claim-rewards` or `claim-staker-rewards` still decrements `remaining-cycles`, burns one installment from escrow, and advances the schedule. A junk or already-settled `withdrawal-request` is not stored and does not stall the claim.
+- **Always advance.** A failed `claim-rewards` or `claim-staker-rewards` still decrements `remaining-claims`, burns one installment from escrow, and advances the schedule. A junk or already-settled `withdrawal-request` is not stored and does not stall the claim.
 - **Self-heal pull.** If a signer manager has earned rewards in pox-5 for the reward cycle, the registry calls `claim-rewards` before `claim-staker-rewards`.
 - **Escrow then burn.** Fees are held as `prepaid-ustx` and burned one installment at a time when a claim is made. Admins do not need to escrow funds.
 - **Self-register (or admin).** Only the staker or an admin may `register-for-claims` / `add-claims`. Cancel is staker-only, including when an admin created the registration; remaining escrow is refunded to the staker.
-- **add-claims preserves schedule.** Buying more installments for `{staker, signer-manager}` only increases `remaining-cycles` and `prepaid-ustx`. Re-registering the same key fails with `ERR_ALREADY_REGISTERED`.
+- **add-claims preserves schedule.** Buying more installments for `{staker, signer-manager}` only increases `remaining-claims` and `prepaid-ustx`. Re-registering the same key fails with `ERR_ALREADY_REGISTERED`.
 
 ## Gotchas
 

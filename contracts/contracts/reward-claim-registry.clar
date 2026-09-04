@@ -49,8 +49,10 @@
     )
 ))
 
-;; The longest STX lock in PoX-5 is 96 reward cycles, which equals 192 distribution cycles
-(define-constant MAX_DISTRIBUTION_CYCLES u192)
+;; Cap on claim installments purchasable in one register/add-claims call.
+;; Matches the longest PoX-5 STX lock (96 reward cycles = 192 distribution
+;; cycles), which bounds how many distribution-aligned claims you can schedule.
+(define-constant MAX_CLAIM_INSTALLMENTS u192)
 ;; Minimum Bitcoin blocks after indexing before get-pending-withdrawals
 ;; will consult sbtc-registry. Settle itself is not gated on this.
 (define-constant WITHDRAWAL_MIN_BURN_AGE u7)
@@ -84,7 +86,7 @@
 ;; call was in flight (same pattern as pox-5's ERR_REENTRANT_CALL).
 (define-constant ERR_REENTRANT_CALL (err u612))
 
-;; A (list 100 uint) whose only job is to bound the get-pending-claims,
+;; A (list 100 uint) whose job is to bound the get-pending-claims,
 ;; get-registrations, get-pending-withdrawals, and get-withdrawals folds to
 ;; at most 100 iterations per call.
 ;; @format-ignore
@@ -109,7 +111,7 @@
 (map-set admins tx-sender true)
 
 ;; This is the amount of uSTX escrowed per claim installment when buying
-(define-data-var fee-per-cycle uint u100000)
+(define-data-var fee-per-claim uint u10000)
 
 ;; Reentrancy guard: prevents cross-function re-entry through signer-manager
 ;; trait calls (mirrors pox-5's signer-manager-call-active).
@@ -134,20 +136,22 @@
         signer-manager: principal,
     }
     {
+        ;; The bond index of the staker's pox-5 position. None means the
+        ;; position is an STX-only stake.
         bond-index: (optional uint),
-        remaining-cycles: uint,
-        ;; When true, advance by two distribution cycles so at most one claim
-        ;; runs per reward cycle, seeded on the second half. When false,
-        ;; advance by one so up to two claims run per reward cycle, seeded on
-        ;; the first half, jumping to the next reward cycle's first half when
-        ;; catching up past a finished cycle.
+        ;; The number of remaining prepaid claim installments.
+        remaining-claims: uint,
+        ;; When true, advance by two distribution cycles so at most one
+        ;; claim runs per reward cycle. When false, up to two claims run
+        ;; per reward cycle.
         one-claim-per-reward-cycle: bool,
         ;; The next distribution cycle this registration will settle.
         ;; Pending when this value is less than current-distribution-cycle and
         ;; calculate-rewards has covered through the end of this distribution.
         next-claim-distribution: uint,
-        ;; STX held by this contract for unconsumed installments. Burned one
-        ;; installment at a time on advance; refunded to the staker on cancel.
+        ;; The STX held by this contract for unconsumed installments.
+        ;; Burned one installment at a time per processed claim. Note that
+        ;; this amount is refunded to the staker when they cancel.
         prepaid-ustx: uint,
     }
 )
@@ -160,7 +164,7 @@
 ;;
 ;; Returns:
 ;;   The registration tuple if present, otherwise none. The tuple holds
-;;   bond-index, remaining-cycles, one-claim-per-reward-cycle,
+;;   bond-index, remaining-claims, one-claim-per-reward-cycle,
 ;;   next-claim-distribution, and prepaid-ustx.
 (define-read-only (get-registration
         (staker principal)
@@ -290,9 +294,9 @@
 ;; Read the current STX fee escrowed per claim installment when buying.
 ;;
 ;; Returns:
-;;   The fee-per-cycle data-var value in micro-STX.
-(define-read-only (get-fee-per-cycle)
-    (var-get fee-per-cycle)
+;;   The fee-per-claim data-var value in micro-STX.
+(define-read-only (get-fee-per-claim)
+    (var-get fee-per-claim)
 )
 
 ;; --- Doubly-linked-list maintenance over registration-ll ---
@@ -455,7 +459,7 @@
 ;; calculate-rewards has covered that claim distribution.
 (define-private (is-pending
         (registration {
-            remaining-cycles: uint,
+            remaining-claims: uint,
             bond-index: (optional uint),
             one-claim-per-reward-cycle: bool,
             next-claim-distribution: uint,
@@ -465,7 +469,7 @@
         (last-compute-distribution (optional uint))
     )
     (and
-        (> (get remaining-cycles registration) u0)
+        (> (get remaining-claims registration) u0)
         (< (get next-claim-distribution registration) current-distribution-cycle)
         (rewards-calculated-for-claim-distribution (get next-claim-distribution registration)
             last-compute-distribution
@@ -584,7 +588,7 @@
 ;; List registrations whose next claim is pending. A registration is deemed
 ;; pending when:
 ;;
-;; * The remaining-cycles is greater than zero
+;; * The remaining-claims is greater than zero
 ;; * next-claim-distribution is less than the current distribution cycle
 ;; * pox-5::calculate-rewards has covered the distribution that will be
 ;;   claimed for next
@@ -667,7 +671,7 @@
                     staker: principal,
                     signer-manager: principal,
                     bond-index: (optional uint),
-                    remaining-cycles: uint,
+                    remaining-claims: uint,
                     one-claim-per-reward-cycle: bool,
                     next-claim-distribution: uint,
                     prepaid-ustx: uint,
@@ -753,16 +757,16 @@
 ;; prepaid-ustx balances are unchanged.
 ;;
 ;; Parameters:
-;;   new-fee  The new fee-per-cycle in micro-STX. Must be greater than zero.
+;;   new-fee  The new fee-per-claim in micro-STX. Must be greater than zero.
 ;;
 ;; Returns:
 ;;   ok true on success, or an error if the caller is not an admin or new-fee
 ;;   is zero.
-(define-public (set-fee-per-cycle (new-fee uint))
+(define-public (set-fee-per-claim (new-fee uint))
     (begin
         (try! (authorize-admin))
         (asserts! (> new-fee u0) ERR_ZERO_FEE)
-        (ok (var-set fee-per-cycle new-fee))
+        (ok (var-set fee-per-claim new-fee))
     )
 )
 
@@ -776,15 +780,14 @@
     (ok (asserts! (or (is-eq contract-caller staker) (is-admin contract-caller)) ERR_UNAUTHORIZED))
 )
 
-;; Escrow the STX fee for num-cycles installments unless contract-caller is
-;; an admin. Transfers into this contract. Returns the micro-STX amount
-;; escrowed.
-(define-private (escrow-registration-fee (num-cycles uint))
+;; Escrow the STX fee for the given number of claim installments unless
+;; contract-caller is an admin. Returns the micro-STX amount escrowed.
+(define-private (escrow-registration-fee (num-claims uint))
     (let (
-            (price (var-get fee-per-cycle))
+            (price (var-get fee-per-claim))
             (amount (if (is-admin contract-caller)
                 u0
-                (* num-cycles price)
+                (* num-claims price)
             ))
         )
         (if (> amount u0)
@@ -818,7 +821,8 @@
 ;;                               of one, seeded on the first half, with catch-up
 ;;                               when a reward cycle is fully past.
 ;;   fee                         STX paid by contract-caller. Buys the minimum of
-;;                               fee divided by fee-per-cycle and 192 installments.
+;;                               fee divided by fee-per-claim and
+;;                               MAX_CLAIM_INSTALLMENTS.
 ;;                               Only the used portion is escrowed; any remainder
 ;;                               stays with the caller. Admins escrow nothing.
 ;;
@@ -835,8 +839,8 @@
         (fee uint)
     )
     (let (
-            (price (var-get fee-per-cycle))
-            (num-cycles (min-uint (/ fee price) MAX_DISTRIBUTION_CYCLES))
+            (price (var-get fee-per-claim))
+            (num-claims (min-uint (/ fee price) MAX_CLAIM_INSTALLMENTS))
             (signer (contract-of signer-manager))
             (key {
                 staker: staker,
@@ -846,16 +850,16 @@
         )
         (try! (authorize-staker-or-admin staker))
         ;; Validate before escrowing.
-        (asserts! (> num-cycles u0) ERR_INSUFFICIENT_FEE)
+        (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
         (asserts! (is-none (map-get? registrations key)) ERR_ALREADY_REGISTERED)
         (asserts! (is-eq signer (get signer position)) ERR_SIGNER_MANAGER_MISMATCH)
         (asserts! (>= start-reward-cycle (get first-reward-cycle position))
             ERR_INVALID_START_REWARD_CYCLE
         )
-        (let ((escrowed (try! (escrow-registration-fee num-cycles))))
+        (let ((escrowed (try! (escrow-registration-fee num-claims))))
             (map-set registrations key {
                 bond-index: (get bond-index position),
-                remaining-cycles: num-cycles,
+                remaining-claims: num-claims,
                 one-claim-per-reward-cycle: one-claim-per-reward-cycle,
                 next-claim-distribution: (initial-next-claim-distribution start-reward-cycle one-claim-per-reward-cycle),
                 prepaid-ustx: escrowed,
@@ -868,10 +872,10 @@
                 signer-manager: signer,
                 start-reward-cycle: start-reward-cycle,
                 one-claim-per-reward-cycle: one-claim-per-reward-cycle,
-                num-cycles: num-cycles,
+                num-claims: num-claims,
                 escrowed: escrowed,
             })
-            (ok num-cycles)
+            (ok num-claims)
         )
     )
 )
@@ -886,7 +890,7 @@
 ;;                   unless the caller is an admin.
 ;;   signer-manager  The signer-manager principal on the registration key.
 ;;   fee             STX paid by contract-caller. Buys the minimum of fee divided by
-;;                   fee-per-cycle and 192 installments. Only the used portion
+;;                   fee-per-claim and MAX_CLAIM_INSTALLMENTS. Only the used portion
 ;;                   is escrowed; any remainder stays with the caller. Admins
 ;;                   escrow nothing.
 ;;
@@ -902,23 +906,23 @@
         (fee uint)
     )
     (let (
-            (price (var-get fee-per-cycle))
-            (num-cycles (min-uint (/ fee price) MAX_DISTRIBUTION_CYCLES))
+            (price (var-get fee-per-claim))
+            (num-claims (min-uint (/ fee price) MAX_CLAIM_INSTALLMENTS))
             (key {
                 staker: staker,
                 signer-manager: signer-manager,
             })
         )
-        (asserts! (> num-cycles u0) ERR_INSUFFICIENT_FEE)
+        (asserts! (> num-claims u0) ERR_INSUFFICIENT_FEE)
         (try! (authorize-staker-or-admin staker))
         ;; Fail before escrowing if this key is not registered.
         (let (
                 (existing (unwrap! (map-get? registrations key) ERR_NOT_REGISTERED))
-                (escrowed (try! (escrow-registration-fee num-cycles)))
+                (escrowed (try! (escrow-registration-fee num-claims)))
             )
             (map-set registrations key
                 (merge existing {
-                    remaining-cycles: (+ (get remaining-cycles existing) num-cycles),
+                    remaining-claims: (+ (get remaining-claims existing) num-claims),
                     prepaid-ustx: (+ (get prepaid-ustx existing) escrowed),
                 })
             )
@@ -927,10 +931,10 @@
                 staker: staker,
                 payer: contract-caller,
                 signer-manager: signer-manager,
-                num-cycles: num-cycles,
+                num-claims: num-claims,
                 escrowed: escrowed,
             })
-            (ok num-cycles)
+            (ok num-claims)
         )
     )
 )
@@ -986,9 +990,9 @@
     )
 )
 
-;; Consume one installment: burn prepaid-ustx / remaining-cycles from escrow
+;; Consume one installment: burn prepaid-ustx / remaining-claims from escrow
 ;; (or all remaining prepaid on the last claim), then delete the registration
-;; when remaining-cycles would hit zero, otherwise decrement remaining-cycles
+;; when remaining-claims would hit zero, otherwise decrement remaining-claims
 ;; and prepaid-ustx and advance next-claim-distribution via next-claim-after.
 ;;
 ;; #[allow(unchecked_data)]
@@ -999,7 +1003,7 @@
         })
         (registration {
             bond-index: (optional uint),
-            remaining-cycles: uint,
+            remaining-claims: uint,
             one-claim-per-reward-cycle: bool,
             next-claim-distribution: uint,
             prepaid-ustx: uint,
@@ -1007,7 +1011,7 @@
         (current-distribution-cycle uint)
     )
     (let (
-            (remaining (get remaining-cycles registration))
+            (remaining (get remaining-claims registration))
             (prepaid (get prepaid-ustx registration))
             (burn-amount (if (<= remaining u1)
                 prepaid
@@ -1031,7 +1035,7 @@
                 (begin
                     (map-set registrations key
                         (merge registration {
-                            remaining-cycles: (- remaining u1),
+                            remaining-claims: (- remaining u1),
                             prepaid-ustx: (- prepaid burn-amount),
                             next-claim-distribution: (next-claim-after (get next-claim-distribution registration)
                                 (get one-claim-per-reward-cycle registration)
@@ -1135,7 +1139,7 @@
         })
         (registration {
             bond-index: (optional uint),
-            remaining-cycles: uint,
+            remaining-claims: uint,
             one-claim-per-reward-cycle: bool,
             next-claim-distribution: uint,
             prepaid-ustx: uint,
@@ -1228,7 +1232,7 @@
             (reward-cycle (/ claim-distribution u2))
             (bond-index (get bond-index registration))
         )
-        (asserts! (> (get remaining-cycles registration) u0) ERR_NOT_REGISTERED)
+        (asserts! (> (get remaining-claims registration) u0) ERR_NOT_REGISTERED)
         (asserts! (< claim-distribution current-distribution-cycle) ERR_ALREADY_CLAIMED)
         (asserts!
             (rewards-calculated-for-claim-distribution claim-distribution last-compute-distribution)

@@ -100,7 +100,7 @@ function stxRegistration(
 ) {
   return Cl.tuple({
     "bond-index": Cl.none(),
-    "remaining-cycles": Cl.uint(remaining),
+    "remaining-claims": Cl.uint(remaining),
     "one-claim-per-reward-cycle": Cl.bool(true),
     "next-claim-distribution": Cl.uint(nextClaimDistribution),
     "prepaid-ustx": Cl.uint(prepaid),
@@ -115,7 +115,7 @@ function bondRegistration(
 ) {
   return Cl.tuple({
     "bond-index": Cl.some(Cl.uint(bondIndex)),
-    "remaining-cycles": Cl.uint(remaining),
+    "remaining-claims": Cl.uint(remaining),
     "one-claim-per-reward-cycle": Cl.bool(false),
     "next-claim-distribution": Cl.uint(nextClaimDistribution),
     "prepaid-ustx": Cl.uint(prepaid),
@@ -177,7 +177,7 @@ function registrationRow(
     staker: Cl.principal(staker),
     "signer-manager": Cl.principal(SIGNER_MANAGER),
     "bond-index": bondIndex,
-    "remaining-cycles": Cl.uint(remaining),
+    "remaining-claims": Cl.uint(remaining),
     "one-claim-per-reward-cycle": Cl.bool(oneClaimPerRewardCycle),
     "next-claim-distribution": Cl.uint(nextClaimDistribution),
     "prepaid-ustx": Cl.uint(prepaid),
@@ -272,7 +272,7 @@ describe("admin", () => {
   });
 
   // Documents the self-lockout footgun: the sole admin can remove itself,
-  // permanently bricking set-fee-per-cycle and update-admin. If a last-admin
+  // permanently bricking set-fee-per-claim and update-admin. If a last-admin
   // guard is added, flip this expectation.
   it("the sole admin CAN lock itself out (no last-admin guard)", () => {
     simnet.callPublicFn(
@@ -282,27 +282,27 @@ describe("admin", () => {
       deployer,
     );
     expect(
-      simnet.callPublicFn("reward-claim-registry", "set-fee-per-cycle", [Cl.uint(1)], deployer).result,
+      simnet.callPublicFn("reward-claim-registry", "set-fee-per-claim", [Cl.uint(1)], deployer).result,
     ).toBeErr(Cl.uint(ERR_NOT_ADMIN));
   });
 });
 
-describe("set-fee-per-cycle", () => {
+describe("set-fee-per-claim", () => {
   it("admin can change the fee", () => {
     expect(
-      simnet.callPublicFn("reward-claim-registry", "set-fee-per-cycle", [Cl.uint(250000)], deployer)
+      simnet.callPublicFn("reward-claim-registry", "set-fee-per-claim", [Cl.uint(250000)], deployer)
         .result,
     ).toBeOk(Cl.bool(true));
   });
   it("rejects a non-admin", () => {
     expect(
-      simnet.callPublicFn("reward-claim-registry", "set-fee-per-cycle", [Cl.uint(250000)], wallet1)
+      simnet.callPublicFn("reward-claim-registry", "set-fee-per-claim", [Cl.uint(250000)], wallet1)
         .result,
     ).toBeErr(Cl.uint(ERR_NOT_ADMIN));
   });
   it("rejects a zero fee", () => {
     expect(
-      simnet.callPublicFn("reward-claim-registry", "set-fee-per-cycle", [Cl.uint(0)], deployer).result,
+      simnet.callPublicFn("reward-claim-registry", "set-fee-per-claim", [Cl.uint(0)], deployer).result,
     ).toBeErr(Cl.uint(ERR_ZERO_FEE));
   });
 });
@@ -338,7 +338,7 @@ describe("register-for-claims", () => {
     );
   });
 
-  it("caps claims bought at MAX_DISTRIBUTION_CYCLES (192)", () => {
+  it("caps claims bought at MAX_CLAIM_INSTALLMENTS (192)", () => {
     const before = stxBalance(wallet1);
     const { result } = registerForClaims(wallet1, 500n * FEE_PER_CLAIM, wallet1, SIGNER_MANAGER, STX_START, true);
     expect(result).toBeOk(Cl.uint(192));
@@ -943,7 +943,7 @@ describe("get-registrations", () => {
             value: Array<{
               value: {
                 staker: { value: string };
-                "remaining-cycles": { value: string };
+                "remaining-claims": { value: string };
                 "next-claim-distribution": { value: string };
               };
             }>;
@@ -958,7 +958,7 @@ describe("get-registrations", () => {
         const rowStakers = page.rows.value.map((row) => row.value.staker.value);
         pageSizes.push(rowStakers.length);
         for (const row of page.rows.value) {
-          expect(row.value["remaining-cycles"].value).toBe("1");
+          expect(row.value["remaining-claims"].value).toBe("1");
           expect(row.value["next-claim-distribution"].value).toBe(
             STX_FIRST_CLAIM_DIST.toString(),
           );
@@ -1848,7 +1848,7 @@ describe("claim schedule invariants", () => {
     });
   });
 
-  describe("signer-manager errors still advance remaining-cycles", () => {
+  describe("signer-manager errors still advance remaining-claims", () => {
     beforeEach(() => {
       initPox5();
       registerMockSignerManager();

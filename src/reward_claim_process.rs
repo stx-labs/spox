@@ -21,10 +21,16 @@ use crate::stacks::reward_claim_registry::RewardClaimRegistry;
 use crate::stacks::transaction::IntoContractCall as _;
 use crate::stacks::wallet::StacksWallet;
 
-/// The transaction fee for all contract call transactions against the
-/// registry.
+/// The transaction fee per element in batch contract calls against the
+/// registry. For `process-reward-claims` the element is a staker, while
+/// for `settle-pending-withdrawals` the element is an unsettled
+/// withdrawal.
+///
 /// TODO: remove and fetch the market fee rate from the node.
-const TX_FEE: u64 = 100000;
+const PER_ITEM_TX_FEE: u64 = 2000;
+
+/// The base transaction fee for contract calls against the registry.
+const BASE_TX_FEE: u64 = 3000;
 
 /// The loop for processing reward claims that runs whenever a new Bitcoin
 /// block is detected.
@@ -82,13 +88,16 @@ async fn process_claims(state: &RewardClaimState, chain_tip: &BlockRef) -> Resul
     }
 
     for batch in batches {
+        let num_stakers = batch.num_stakers() as u64;
         tracing::info!(
             "signer_manager" = %batch.signer_manager(),
-            "num_stakers" = %batch.num_stakers(),
+            "num_stakers" = %num_stakers,
             "processing process-reward-claims batch",
         );
+
+        let tx_fee = num_stakers * PER_ITEM_TX_FEE + BASE_TX_FEE;
         let payload = batch.into_tx_payload();
-        let tx = state.wallet.sign_tx(payload, TX_FEE);
+        let tx = state.wallet.sign_tx(payload, tx_fee);
 
         match state.client().submit_tx(&tx).await {
             Ok(SubmitTxResponse::Acceptance(txid)) => {
@@ -130,13 +139,16 @@ async fn process_withdrawals(state: &RewardClaimState, chain_tip: &BlockRef) -> 
     }
 
     for batch in batches {
+        let num_withdrawals = batch.num_withdrawals() as u64;
         tracing::info!(
             "signer_manager" = %batch.signer_manager(),
-            "num_withdrawals" = %batch.num_withdrawals(),
+            "num_withdrawals" = %num_withdrawals,
             "processing settle-pending-withdrawals batch",
         );
+
+        let tx_fee = num_withdrawals * PER_ITEM_TX_FEE + BASE_TX_FEE;
         let payload = batch.into_tx_payload();
-        let tx = state.wallet.sign_tx(payload, TX_FEE);
+        let tx = state.wallet.sign_tx(payload, tx_fee);
 
         match state.client().submit_tx(&tx).await {
             Ok(SubmitTxResponse::Acceptance(txid)) => {

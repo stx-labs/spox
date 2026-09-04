@@ -87,8 +87,8 @@ export const ERR_ALREADY_REGISTERED = 610n;
 export const ERR_SIGNER_MANAGER_MISMATCH = 611n;
 export const ERR_REENTRANT_CALL = 612n;
 
-/** reward-claim-registry's default fee-per-sweep. */
-export const FEE_PER_CLAIM = 100_000n;
+/** reward-claim-registry's default fee-per-claim. */
+export const FEE_PER_CLAIM = 10_000n;
 
 // ---------------------------------------------------------------------------
 // low-level helpers
