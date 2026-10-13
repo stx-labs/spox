@@ -145,7 +145,10 @@ impl DepositMonitor {
         Ok(utxos)
     }
 
-    /// Check pending deposits confirmed to the monitored addresses
+    /// Check pending deposits confirmed to the monitored addresses.
+    ///
+    /// Returns at most `max_deposits_per_block` deposits. Deposits beyond
+    /// that cap are left for a later Bitcoin block.
     pub fn get_pending_deposits(
         &mut self,
         chain_tip: &BlockRef,
@@ -154,7 +157,12 @@ impl DepositMonitor {
         if script_pubkeys.is_empty() {
             return Ok(Vec::new());
         }
-        let utxos = self.get_utxos(&script_pubkeys, chain_tip)?;
+        let mut utxos = self.get_utxos(&script_pubkeys, chain_tip)?;
+        // Submit the oldest deposits first so a capped batch cannot starve
+        // earlier payments when new ones keep arriving.
+        utxos.sort();
+
+        let max_deposits = self.context.settings().max_deposits_per_block.get();
 
         let create_deposits = utxos
             .iter()
@@ -184,6 +192,7 @@ impl DepositMonitor {
                     })
                     .ok()
             })
+            .take(max_deposits)
             .collect();
 
         Ok(create_deposits)

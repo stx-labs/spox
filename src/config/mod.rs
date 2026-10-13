@@ -1,5 +1,6 @@
 //! sPoX Configuration
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,6 +13,7 @@ use secp256k1::SecretKey;
 use serde::Deserialize;
 use url::Url;
 
+use crate::DEFAULT_MAX_DEPOSITS_PER_BLOCK;
 use crate::config::error::SpoxConfigError;
 use crate::config::serialization::{
     contract_deserializer, contract_deserializer_option, duration_seconds_deserializer,
@@ -58,6 +60,10 @@ pub struct Settings {
     /// How often looking for new deposit transactions
     #[serde(deserialize_with = "duration_seconds_deserializer")]
     pub polling_interval: std::time::Duration,
+    /// Maximum number of deposits submitted to Emily for each new Bitcoin block.
+    ///
+    /// Pending deposits beyond this cap are submitted on later blocks.
+    pub max_deposits_per_block: NonZeroUsize,
     /// Monitored deposits
     #[serde(default)]
     pub deposit: HashMap<String, MonitoredDepositConfig>,
@@ -132,6 +138,10 @@ impl Settings {
 
         cfg_builder = cfg_builder.set_default("polling_interval", 30)?;
         cfg_builder = cfg_builder.set_default("bitcoin_rpc_timeout", 60 * 5)?;
+        cfg_builder = cfg_builder.set_default(
+            "max_deposits_per_block",
+            DEFAULT_MAX_DEPOSITS_PER_BLOCK.get() as u64,
+        )?;
 
         if let Some(path) = config_path {
             cfg_builder = cfg_builder.add_source(File::from(path.as_ref()));
@@ -230,6 +240,10 @@ mod tests {
         );
         assert_eq!(settings.polling_interval, Duration::from_secs(30));
         assert_eq!(settings.bitcoin_rpc_timeout, Duration::from_mins(5));
+        assert_eq!(
+            settings.max_deposits_per_block,
+            DEFAULT_MAX_DEPOSITS_PER_BLOCK
+        );
         assert!(settings.registry_contract.is_none());
         assert!(settings.reward_claims.is_none());
         let stacks = settings.stacks.as_ref().unwrap();
@@ -269,6 +283,29 @@ mod tests {
         set_var(format!("SPOX_{}", field.to_uppercase()), "0");
 
         Settings::new_from_default_config().expect_err("value for must be non zero");
+    }
+
+    #[test]
+    fn max_deposits_per_block_can_be_overridden() {
+        clear_env();
+
+        set_var("SPOX_MAX_DEPOSITS_PER_BLOCK", "10");
+
+        let settings = Settings::new_from_default_config().unwrap();
+
+        assert_eq!(settings.max_deposits_per_block.get(), 10);
+    }
+
+    #[test]
+    fn zero_max_deposits_per_block_fails() {
+        clear_env();
+
+        set_var("SPOX_MAX_DEPOSITS_PER_BLOCK", "0");
+
+        assert!(matches!(
+            Settings::new_from_default_config(),
+            Err(SpoxConfigError::ConfigError(_))
+        ));
     }
 
     #[test]

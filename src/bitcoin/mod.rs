@@ -26,8 +26,10 @@ impl std::fmt::Display for BlockRef {
 }
 
 /// Unspent transaction output
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Utxo {
+    /// Block height of this transaction
+    pub block_height: u64,
     /// Transaction id
     pub txid: bitcoin::Txid,
     /// Output index
@@ -36,6 +38,4 @@ pub struct Utxo {
     pub script_pub_key: bitcoin::ScriptBuf,
     /// Amount of this output
     pub amount: bitcoin::Amount,
-    /// Block height of this transaction
-    pub block_height: u64,
 }
