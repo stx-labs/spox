@@ -27,7 +27,7 @@ bitcoin_rpc_endpoint = "http://devnet:devnet@127.0.0.1:18443"
 
 # Maximum number of deposits to submit to Emily for each new Bitcoin block.
 # Must be positive. Additional pending deposits are submitted on later
-# blocks, oldest first.
+# blocks.
 #
 # Required: false
 # Environment: SPOX_MAX_DEPOSITS_PER_BLOCK

@@ -147,8 +147,8 @@ impl DepositMonitor {
 
     /// Check pending deposits confirmed to the monitored addresses.
     ///
-    /// Returns at most `max_deposits_per_block` deposits, oldest first.
-    /// Deposits beyond that cap are left for a later Bitcoin block.
+    /// Returns at most `max_deposits_per_block` deposits. Deposits beyond
+    /// that cap are left for a later Bitcoin block.
     pub fn get_pending_deposits(
         &mut self,
         chain_tip: &BlockRef,
@@ -160,56 +160,40 @@ impl DepositMonitor {
         let mut utxos = self.get_utxos(&script_pubkeys, chain_tip)?;
         // Submit the oldest deposits first so a capped batch cannot starve
         // earlier payments when new ones keep arriving.
-        utxos.sort_unstable_by(|left, right| {
-            left.block_height
-                .cmp(&right.block_height)
-                .then_with(|| left.txid.cmp(&right.txid))
-                .then_with(|| left.vout.cmp(&right.vout))
-        });
+        utxos.sort();
 
         let max_deposits = self.context.settings().max_deposits_per_block.get();
-        let mut create_deposits = Vec::new();
-        let mut reached_cap = false;
 
-        for utxo in &utxos {
-            if create_deposits.len() >= max_deposits {
-                reached_cap = true;
-                break;
-            }
+        let create_deposits = utxos
+            .iter()
+            .filter_map(|utxo| {
+                // Emily will nop for duplicates, still we try avoiding wasting
+                // time for deposits we already created in this session.
+                if self.created_deposits.get(&(utxo.txid, utxo.vout)).is_some() {
+                    return None;
+                }
 
-            // Emily will nop for duplicates, still we try avoiding wasting
-            // time for deposits we already created in this session.
-            if self.created_deposits.get(&(utxo.txid, utxo.vout)).is_some() {
-                continue;
-            }
-
-            match self.get_deposit_from_utxo(utxo, chain_tip) {
-                Ok(deposit) => create_deposits.push(deposit),
-                Err(error) => match error {
-                    Error::DepositExpired => tracing::info!(
-                        %error,
-                        txid = %utxo.txid,
-                        vout = %utxo.vout,
-                        block_height = %utxo.block_height,
-                        "deposit is expired; skipping utxo"
-                    ),
-                    _ => tracing::warn!(
-                        %error,
-                        txid = %utxo.txid,
-                        vout = %utxo.vout,
-                        block_height = %utxo.block_height,
-                        "failed to get deposit from utxo; skipping utxo"
-                    ),
-                },
-            }
-        }
-
-        if reached_cap {
-            tracing::info!(
-                submitting = max_deposits,
-                "reached the per-block deposit cap; remaining deposits will be submitted later"
-            );
-        }
+                self.get_deposit_from_utxo(utxo, chain_tip)
+                    .inspect_err(|error| match error {
+                        Error::DepositExpired => tracing::info!(
+                            %error,
+                            txid = %utxo.txid,
+                            vout = %utxo.vout,
+                            block_height = %utxo.block_height,
+                            "deposit is expired; skipping utxo"
+                        ),
+                        _ => tracing::warn!(
+                            %error,
+                            txid = %utxo.txid,
+                            vout = %utxo.vout,
+                            block_height = %utxo.block_height,
+                            "failed to get deposit from utxo; skipping utxo"
+                        ),
+                    })
+                    .ok()
+            })
+            .take(max_deposits)
+            .collect();
 
         Ok(create_deposits)
     }

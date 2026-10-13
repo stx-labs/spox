@@ -62,7 +62,7 @@ pub struct Settings {
     pub polling_interval: std::time::Duration,
     /// Maximum number of deposits submitted to Emily for each new Bitcoin block.
     ///
-    /// Pending deposits beyond this cap are submitted on later blocks, oldest first.
+    /// Pending deposits beyond this cap are submitted on later blocks.
     pub max_deposits_per_block: NonZeroUsize,
     /// Monitored deposits
     #[serde(default)]
