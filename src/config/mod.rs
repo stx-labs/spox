@@ -1,5 +1,6 @@
 //! sPoX Configuration
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,6 +13,7 @@ use secp256k1::SecretKey;
 use serde::Deserialize;
 use url::Url;
 
+use crate::DEFAULT_MAX_DEPOSITS_PER_BLOCK;
 use crate::config::error::SpoxConfigError;
 use crate::config::serialization::{
     contract_deserializer, contract_deserializer_option, duration_seconds_deserializer,
@@ -24,9 +26,6 @@ mod serialization;
 
 /// Config environment variables prefix
 pub const CONFIG_PREFIX: &str = "SPOX";
-
-/// Default number of deposits submitted to Emily for each new Bitcoin block.
-const DEFAULT_MAX_DEPOSITS_PER_BLOCK: i64 = 25;
 
 /// A monitored deposit config
 #[derive(Deserialize, Clone, Debug)]
@@ -64,7 +63,7 @@ pub struct Settings {
     /// Maximum number of deposits submitted to Emily for each new Bitcoin block.
     ///
     /// Pending deposits beyond this cap are submitted on later blocks, oldest first.
-    pub max_deposits_per_block: usize,
+    pub max_deposits_per_block: NonZeroUsize,
     /// Monitored deposits
     #[serde(default)]
     pub deposit: HashMap<String, MonitoredDepositConfig>,
@@ -139,8 +138,10 @@ impl Settings {
 
         cfg_builder = cfg_builder.set_default("polling_interval", 30)?;
         cfg_builder = cfg_builder.set_default("bitcoin_rpc_timeout", 60 * 5)?;
-        cfg_builder =
-            cfg_builder.set_default("max_deposits_per_block", DEFAULT_MAX_DEPOSITS_PER_BLOCK)?;
+        cfg_builder = cfg_builder.set_default(
+            "max_deposits_per_block",
+            DEFAULT_MAX_DEPOSITS_PER_BLOCK.get() as u64,
+        )?;
 
         if let Some(path) = config_path {
             cfg_builder = cfg_builder.add_source(File::from(path.as_ref()));
@@ -165,9 +166,6 @@ impl Settings {
             return Err(SpoxConfigError::ZeroDurationForbidden(
                 "bitcoin_rpc_timeout",
             ));
-        }
-        if self.max_deposits_per_block == 0 {
-            return Err(SpoxConfigError::ZeroMaxDepositsPerBlock);
         }
 
         if self.registry_contract.is_some() && self.stacks.is_none() {
@@ -244,7 +242,7 @@ mod tests {
         assert_eq!(settings.bitcoin_rpc_timeout, Duration::from_mins(5));
         assert_eq!(
             settings.max_deposits_per_block,
-            DEFAULT_MAX_DEPOSITS_PER_BLOCK as usize
+            DEFAULT_MAX_DEPOSITS_PER_BLOCK
         );
         assert!(settings.registry_contract.is_none());
         assert!(settings.reward_claims.is_none());
@@ -295,7 +293,7 @@ mod tests {
 
         let settings = Settings::new_from_default_config().unwrap();
 
-        assert_eq!(settings.max_deposits_per_block, 10);
+        assert_eq!(settings.max_deposits_per_block.get(), 10);
     }
 
     #[test]
@@ -306,7 +304,7 @@ mod tests {
 
         assert!(matches!(
             Settings::new_from_default_config(),
-            Err(SpoxConfigError::ZeroMaxDepositsPerBlock)
+            Err(SpoxConfigError::ConfigError(_))
         ));
     }
 

@@ -167,7 +167,7 @@ impl DepositMonitor {
                 .then_with(|| left.vout.cmp(&right.vout))
         });
 
-        let max_deposits = self.context.settings().max_deposits_per_block;
+        let max_deposits = self.context.settings().max_deposits_per_block.get();
         let mut create_deposits = Vec::new();
         let mut reached_cap = false;
 
