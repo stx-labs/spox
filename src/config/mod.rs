@@ -264,10 +264,10 @@ mod tests {
 
         set_var(format!("SPOX_{}", field.to_uppercase()), "not a url");
 
-        assert!(matches!(
+        std::assert_matches!(
             Settings::new_from_default_config(),
             Err(SpoxConfigError::ConfigError(_))
-        ));
+        );
     }
 
     #[test_case("polling_interval"; "polling interval")]
@@ -299,10 +299,10 @@ mod tests {
 
         set_var("SPOX_REGISTRY_CONTRACT", registry);
 
-        assert!(matches!(
+        std::assert_matches!(
             Settings::new_from_default_config(),
             Err(SpoxConfigError::ConfigError(_))
-        ));
+        );
     }
 
     #[test_case(4933574768; "year 2126")]
@@ -347,10 +347,10 @@ mod tests {
 
         set_var("SPOX_NODE_WALLET__NAME", "");
 
-        assert!(matches!(
+        std::assert_matches!(
             Settings::new_from_default_config(),
             Err(SpoxConfigError::EmptyBitcoinWalletName)
-        ));
+        );
     }
 
     #[test]
@@ -370,10 +370,10 @@ mod tests {
             private_key: SecretKey::from_slice(&[0xa0; 32]).unwrap(),
         });
 
-        assert!(matches!(
+        std::assert_matches!(
             settings.validate(),
             Err(SpoxConfigError::MissingStacksConfig)
-        ));
+        );
     }
 
     #[test]

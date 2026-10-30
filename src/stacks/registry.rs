@@ -371,10 +371,10 @@ mod tests {
         let [result_1, result_2] = result.try_into().unwrap();
 
         assert_eq!(MonitoredDeposit::try_from(result_1).unwrap(), deposit);
-        assert!(matches!(
+        std::assert_matches!(
             MonitoredDeposit::try_from(result_2),
             Err(Error::MissingAddressScripts)
-        ));
+        );
 
         mock.assert();
     }
