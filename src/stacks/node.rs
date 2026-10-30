@@ -552,19 +552,18 @@ mod tests {
     async fn get_current_signers_aggregate_key_works(return_none: bool) {
         let aggregate_key = generate_pubkeys(1)[0];
 
-        let data;
-        let expected;
-        if return_none {
+        let (data, expected) = if return_none {
             // 0x00 is the initial value of the signers' aggregate key in
             // the sbtc-registry contract, and
             // get_current_signers_aggregate_key should return None when we
             // receive it.
-            data = vec![0];
-            expected = None;
+            (vec![0], None)
         } else {
-            data = aggregate_key.inner.serialize().to_vec();
-            expected = Some(aggregate_key.into());
-        }
+            (
+                aggregate_key.inner.serialize().to_vec(),
+                Some(aggregate_key.into()),
+            )
+        };
         let aggregate_key_clarity = Value::Sequence(SequenceData::Buffer(BuffData { data }));
 
         // The format of the response JSON is `{"data": "0x<serialized-value>"}` (excluding the proof).
