@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use bitcoin::Address;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
+use clap::Subcommand;
+use clap::ValueEnum;
 use spox::bitcoin::chain_tip::BitcoinChainTipPoller;
 use spox::bitcoin::wallet::load_or_create_wallet;
 use spox::config::Settings;
@@ -12,7 +14,8 @@ use spox::error::Error;
 use spox::reward_claim_process::process_reward_claims;
 use spox::stacks::node::StacksClient;
 use spox::storage::Storage as _;
-use spox::storage::model::{MonitoredDeposit, MonitoredDepositSource};
+use spox::storage::model::MonitoredDeposit;
+use spox::storage::model::MonitoredDepositSource;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum LogOutputFormat {

@@ -4,14 +4,17 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr as _;
 
-use bitcoin::{BlockHash, ScriptBuf, Txid};
+use bitcoin::BlockHash;
+use bitcoin::ScriptBuf;
+use bitcoin::Txid;
 use emily_client::apis::deposit_api;
 use emily_client::models::CreateDepositRequestBody;
 use lru::LruCache;
 use tokio::sync::mpsc;
 
+use crate::bitcoin::BlockRef;
+use crate::bitcoin::Utxo;
 use crate::bitcoin::wallet::import_descriptors;
-use crate::bitcoin::{BlockRef, Utxo};
 use crate::context::Context;
 use crate::error::Error;
 use crate::stacks::registry::GET_ADDRESSES_MAX_IDS;

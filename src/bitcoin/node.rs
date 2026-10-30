@@ -5,14 +5,20 @@ use std::time::Duration;
 
 use bitcoin::ScriptBuf;
 use bitcoincore_rpc::RpcApi;
-use bitcoincore_rpc::jsonrpc::{serde_json, simple_http};
-use bitcoincore_rpc_json::{
-    GetChainTipsResultStatus, GetDescriptorInfoResult, ImportDescriptors, ImportMultiResult,
-    ListUnspentResultEntry, LoadWalletResult, ScanTxOutRequest, Utxo as RpcUtxo,
-};
+use bitcoincore_rpc::jsonrpc::serde_json;
+use bitcoincore_rpc::jsonrpc::simple_http;
+use bitcoincore_rpc_json::GetChainTipsResultStatus;
+use bitcoincore_rpc_json::GetDescriptorInfoResult;
+use bitcoincore_rpc_json::ImportDescriptors;
+use bitcoincore_rpc_json::ImportMultiResult;
+use bitcoincore_rpc_json::ListUnspentResultEntry;
+use bitcoincore_rpc_json::LoadWalletResult;
+use bitcoincore_rpc_json::ScanTxOutRequest;
+use bitcoincore_rpc_json::Utxo as RpcUtxo;
 use url::Url;
 
-use crate::bitcoin::{BlockRef, Utxo};
+use crate::bitcoin::BlockRef;
+use crate::bitcoin::Utxo;
 use crate::error::Error;
 
 impl From<RpcUtxo> for Utxo {

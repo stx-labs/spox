@@ -1,23 +1,31 @@
 //! sPoX Configuration
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
-use bitcoin::{ScriptBuf, XOnlyPublicKey};
+use bitcoin::ScriptBuf;
+use bitcoin::XOnlyPublicKey;
 use bitcoincore_rpc_json::Timestamp;
 use clarity::types::chainstate::StacksAddress;
-use clarity::vm::types::{PrincipalData, QualifiedContractIdentifier};
-use config::{Config, Environment, File};
+use clarity::vm::types::PrincipalData;
+use clarity::vm::types::QualifiedContractIdentifier;
+use config::Config;
+use config::Environment;
+use config::File;
 use secp256k1::SecretKey;
 use serde::Deserialize;
 use url::Url;
 
 use crate::config::error::SpoxConfigError;
-use crate::config::serialization::{
-    contract_deserializer, contract_deserializer_option, duration_seconds_deserializer,
-    principal_deserializer, script_deserializer, stacks_address_deserializer, url_deserializer,
-    xonly_deserializer,
-};
+use crate::config::serialization::contract_deserializer;
+use crate::config::serialization::contract_deserializer_option;
+use crate::config::serialization::duration_seconds_deserializer;
+use crate::config::serialization::principal_deserializer;
+use crate::config::serialization::script_deserializer;
+use crate::config::serialization::stacks_address_deserializer;
+use crate::config::serialization::url_deserializer;
+use crate::config::serialization::xonly_deserializer;
 
 pub mod error;
 mod serialization;
@@ -203,7 +211,8 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
-    use crate::testing::{clear_env, set_var};
+    use crate::testing::clear_env;
+    use crate::testing::set_var;
 
     /// Helper function to quickly create a URL from a string in tests.
     fn parse_url(s: &str) -> url::Url {

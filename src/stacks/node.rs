@@ -3,7 +3,8 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use bitcoin::{PublicKey, XOnlyPublicKey};
+use bitcoin::PublicKey;
+use bitcoin::XOnlyPublicKey;
 use blockstack_lib::burnchains::Txid;
 use blockstack_lib::chainstate::stacks::StacksTransaction;
 use blockstack_lib::codec::StacksMessageCodec as _;
@@ -11,15 +12,19 @@ use clarity::types::chainstate::BlockHeaderHash;
 use clarity::types::chainstate::ConsensusHash;
 use clarity::types::chainstate::StacksAddress;
 use clarity::types::chainstate::StacksBlockId;
+use clarity::vm::ClarityName;
+use clarity::vm::ContractName;
+use clarity::vm::Value;
+use clarity::vm::types::BuffData;
+use clarity::vm::types::SequenceData;
 use clarity::vm::types::StandardPrincipalData;
-use clarity::vm::types::{BuffData, SequenceData};
-use clarity::vm::{ClarityName, ContractName, Value};
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_LENGTH;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
+use serde::Deserializer;
 use url::Url;
 
 use crate::config::Settings;
@@ -483,10 +488,12 @@ fn extract_aggregate_key(value: Value) -> Result<Option<XOnlyPublicKey>, Error> 
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::NetworkKind;
+    use bitcoin::PrivateKey;
     use bitcoin::secp256k1::SECP256K1;
-    use bitcoin::{NetworkKind, PrivateKey};
     use clarity::types::Address;
-    use clarity::vm::types::{BuffData, SequenceData};
+    use clarity::vm::types::BuffData;
+    use clarity::vm::types::SequenceData;
     use test_case::test_case;
 
     use super::*;

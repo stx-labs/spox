@@ -1,16 +1,21 @@
 //! Client for the on-chain deposit address registry.
 
 use bitcoin::ScriptBuf;
-use clarity::vm::types::{
-    ListData, ListTypeData, QualifiedContractIdentifier, SequenceData, TupleData,
-};
-use clarity::vm::{ClarityName, Value};
-use sbtc::deposits::{DepositScriptInputs, ReclaimScriptInputs};
+use clarity::vm::ClarityName;
+use clarity::vm::Value;
+use clarity::vm::types::ListData;
+use clarity::vm::types::ListTypeData;
+use clarity::vm::types::QualifiedContractIdentifier;
+use clarity::vm::types::SequenceData;
+use clarity::vm::types::TupleData;
+use sbtc::deposits::DepositScriptInputs;
+use sbtc::deposits::ReclaimScriptInputs;
 
 use crate::error::Error;
 use crate::stacks::clarity::ClarityTuple;
 use crate::stacks::node::StacksClient;
-use crate::storage::model::{MonitoredDeposit, MonitoredDepositSource};
+use crate::storage::model::MonitoredDeposit;
+use crate::storage::model::MonitoredDepositSource;
 
 /// Maximum number of registered addresses that can be fetched in a single call
 pub const GET_ADDRESSES_MAX_IDS: u32 = 400;
@@ -173,10 +178,14 @@ impl TryFrom<RawRegisteredDeposit> for MonitoredDeposit {
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::{NetworkKind, PrivateKey, PublicKey, secp256k1::SECP256K1};
+    use bitcoin::NetworkKind;
+    use bitcoin::PrivateKey;
+    use bitcoin::PublicKey;
+    use bitcoin::secp256k1::SECP256K1;
     use bitcoincore_rpc::jsonrpc::serde_json;
+    use clarity::types::StacksEpochId;
     use clarity::vm::types::OptionalData;
-    use clarity::{types::StacksEpochId, vm::types::PrincipalData};
+    use clarity::vm::types::PrincipalData;
 
     use super::*;
 
