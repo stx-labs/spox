@@ -13,7 +13,7 @@ test-build:
 	cargo $(CARGO_FLAGS) test build --features "testing" $(CARGO_EXCLUDES) --no-run --locked ${CARGO_BUILD_ARGS}
 
 CARGO_FMT = cargo $(CARGO_FLAGS) fmt --all
-CARGO_FMT_OPTIONS = --config group_imports=StdExternalCrate,imports_granularity=Module
+CARGO_FMT_OPTIONS = --config group_imports=StdExternalCrate,imports_granularity=Item
 CARGO_CLIPPY_BASE = cargo $(CARGO_FLAGS) clippy --workspace --all-targets --all-features --no-deps
 CLIPPY_FLAGS = -D warnings
 

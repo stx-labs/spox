@@ -868,7 +868,7 @@ mod tests {
 
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_page(&[claim.clone()], Some(&next))
+            ok_page(std::slice::from_ref(&claim), Some(&next))
                 .serialize_to_hex()
                 .unwrap(),
         );
@@ -938,7 +938,9 @@ mod tests {
 
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_page(&[claim.clone()], None).serialize_to_hex().unwrap(),
+            ok_page(std::slice::from_ref(&claim), None)
+                .serialize_to_hex()
+                .unwrap(),
         );
 
         let mut stacks_node_server = mockito::Server::new_async().await;
@@ -1091,7 +1093,7 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(format!(
                 r#"{{"okay": true, "result":"0x{}"}}"#,
-                ok_page(&[pending.clone()], None)
+                ok_page(std::slice::from_ref(&pending), None)
                     .serialize_to_hex()
                     .unwrap(),
             ))
@@ -1307,7 +1309,7 @@ mod tests {
 
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_withdrawals_page(&[withdrawal.clone()], Some(&next))
+            ok_withdrawals_page(std::slice::from_ref(&withdrawal), Some(&next))
                 .serialize_to_hex()
                 .unwrap(),
         );
@@ -1368,7 +1370,7 @@ mod tests {
 
         let raw_json_response = format!(
             r#"{{"okay": true, "result":"0x{}"}}"#,
-            ok_withdrawals_page(&[withdrawal.clone()], None)
+            ok_withdrawals_page(std::slice::from_ref(&withdrawal), None)
                 .serialize_to_hex()
                 .unwrap(),
         );
@@ -1529,7 +1531,7 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(format!(
                 r#"{{"okay": true, "result":"0x{}"}}"#,
-                ok_withdrawals_page(&[pending.clone()], None)
+                ok_withdrawals_page(std::slice::from_ref(&pending), None)
                     .serialize_to_hex()
                     .unwrap(),
             ))

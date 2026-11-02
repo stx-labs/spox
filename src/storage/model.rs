@@ -2,10 +2,12 @@
 
 use bitcoin::ScriptBuf;
 use clarity::vm::types::PrincipalData;
-use sbtc::deposits::{DepositScriptInputs, ReclaimScriptInputs};
+use sbtc::deposits::DepositScriptInputs;
+use sbtc::deposits::ReclaimScriptInputs;
 use serde::de::DeserializeOwned;
 
-use crate::{config::MonitoredDepositConfig, error::Error};
+use crate::config::MonitoredDepositConfig;
+use crate::error::Error;
 
 /// The source for a deposit
 #[derive(Debug, Clone, PartialEq)]

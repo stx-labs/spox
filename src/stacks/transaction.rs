@@ -48,7 +48,6 @@ pub trait IntoContractCall: Sized {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::stacks::reward_claim_registry::RewardClaimsBatch;
     use crate::stacks::reward_claim_registry::WithdrawalsBatch;
 

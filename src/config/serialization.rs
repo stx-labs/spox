@@ -1,9 +1,13 @@
 use std::str::FromStr as _;
 
-use bitcoin::{ScriptBuf, XOnlyPublicKey, secp256k1};
+use bitcoin::ScriptBuf;
+use bitcoin::XOnlyPublicKey;
+use bitcoin::secp256k1;
+use clarity::types::chainstate::StacksAddress;
 use clarity::vm::types::PrincipalData;
-use clarity::{types::chainstate::StacksAddress, vm::types::QualifiedContractIdentifier};
-use serde::{Deserialize, Deserializer};
+use clarity::vm::types::QualifiedContractIdentifier;
+use serde::Deserialize;
+use serde::Deserializer;
 
 /// A deserializer for the url::Url type. Does not support deserializing a list,
 /// only a single URL.

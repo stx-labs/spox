@@ -10,7 +10,8 @@ use crate::error::Error;
 use crate::stacks::node::StacksClient;
 use crate::stacks::registry::DepositAddressRegistry;
 use crate::stacks::wallet::StacksWallet;
-use crate::storage::memory::{SharedStore, Store};
+use crate::storage::memory::SharedStore;
+use crate::storage::memory::Store;
 
 /// Application context
 #[derive(Clone)]

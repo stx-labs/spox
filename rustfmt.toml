@@ -1,2 +1,2 @@
-edition = "2021"
+edition = "2024"
 struct_lit_width = 30

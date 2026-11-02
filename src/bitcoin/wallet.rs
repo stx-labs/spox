@@ -4,8 +4,10 @@ use std::collections::HashSet;
 
 use bitcoin::ScriptBuf;
 use bitcoincore_rpc::Error as BtcRpcError;
-use bitcoincore_rpc::jsonrpc::error::{Error as JsonRpcError, RpcError};
-use bitcoincore_rpc_json::{ImportDescriptors, Timestamp};
+use bitcoincore_rpc::jsonrpc::error::Error as JsonRpcError;
+use bitcoincore_rpc::jsonrpc::error::RpcError;
+use bitcoincore_rpc_json::ImportDescriptors;
+use bitcoincore_rpc_json::Timestamp;
 
 use crate::bitcoin::node::BitcoinCoreClient;
 use crate::error::Error;

@@ -1,16 +1,14 @@
 //! In-memory implementation of the Storage trait
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use bitcoin::ScriptBuf;
 
-use crate::{
-    error::Error,
-    storage::{Storage, model::MonitoredDeposit},
-};
+use crate::error::Error;
+use crate::storage::Storage;
+use crate::storage::model::MonitoredDeposit;
 
 /// A store wrapped in an Arc<Mutex<...>> for interior mutability
 pub type SharedStore = Arc<Mutex<Store>>;

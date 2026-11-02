@@ -3,7 +3,8 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use bitcoin::{PublicKey, XOnlyPublicKey};
+use bitcoin::PublicKey;
+use bitcoin::XOnlyPublicKey;
 use blockstack_lib::burnchains::Txid;
 use blockstack_lib::chainstate::stacks::StacksTransaction;
 use blockstack_lib::codec::StacksMessageCodec as _;
@@ -11,15 +12,19 @@ use clarity::types::chainstate::BlockHeaderHash;
 use clarity::types::chainstate::ConsensusHash;
 use clarity::types::chainstate::StacksAddress;
 use clarity::types::chainstate::StacksBlockId;
+use clarity::vm::ClarityName;
+use clarity::vm::ContractName;
+use clarity::vm::Value;
+use clarity::vm::types::BuffData;
+use clarity::vm::types::SequenceData;
 use clarity::vm::types::StandardPrincipalData;
-use clarity::vm::types::{BuffData, SequenceData};
-use clarity::vm::{ClarityName, ContractName, Value};
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_LENGTH;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
+use serde::Deserializer;
 use url::Url;
 
 use crate::config::Settings;
@@ -483,10 +488,12 @@ fn extract_aggregate_key(value: Value) -> Result<Option<XOnlyPublicKey>, Error> 
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::NetworkKind;
+    use bitcoin::PrivateKey;
     use bitcoin::secp256k1::SECP256K1;
-    use bitcoin::{NetworkKind, PrivateKey};
     use clarity::types::Address;
-    use clarity::vm::types::{BuffData, SequenceData};
+    use clarity::vm::types::BuffData;
+    use clarity::vm::types::SequenceData;
     use test_case::test_case;
 
     use super::*;
@@ -545,19 +552,18 @@ mod tests {
     async fn get_current_signers_aggregate_key_works(return_none: bool) {
         let aggregate_key = generate_pubkeys(1)[0];
 
-        let data;
-        let expected;
-        if return_none {
+        let (data, expected) = if return_none {
             // 0x00 is the initial value of the signers' aggregate key in
             // the sbtc-registry contract, and
             // get_current_signers_aggregate_key should return None when we
             // receive it.
-            data = vec![0];
-            expected = None;
+            (vec![0], None)
         } else {
-            data = aggregate_key.inner.serialize().to_vec();
-            expected = Some(aggregate_key.into());
-        }
+            (
+                aggregate_key.inner.serialize().to_vec(),
+                Some(aggregate_key.into()),
+            )
+        };
         let aggregate_key_clarity = Value::Sequence(SequenceData::Buffer(BuffData { data }));
 
         // The format of the response JSON is `{"data": "0x<serialized-value>"}` (excluding the proof).
