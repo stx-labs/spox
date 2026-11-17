@@ -117,3 +117,63 @@ jobs:
           path: |
             ${{ env.ATTESTATION_FILE }}
             trusted_root.jsonl
+
+  ## Record the released image in the Parameter Store of each environment, so a
+  ## deployment can read it from there. Each environment gates its own job.
+  record-image:
+    name: Record Image (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    needs: image
+    environment: ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - environment/sbtc-private-mainnet
+          - environment/sbtc-mainnet
+    env:
+      ROLE_ARN: ${{ vars.AWS_SPOX_ROLE_ARN }}
+      PARAMETER_NAME: ${{ vars.AWS_SPOX_SSM_IMAGE_TAG_PARAMETER }}
+      ## Tag and digest together: the tag is readable, the digest is what gets pulled.
+      IMAGE_TAG: ${{ github.event.client_payload.tag_name }}@${{ needs.image.outputs.spox }}
+    steps:
+      ## An environment without the variables is not wired yet: skip, do not fail the release.
+      - name: Check Environment Configuration
+        id: check_config
+        run: |
+          if [ -z "${ROLE_ARN}" ] || [ -z "${PARAMETER_NAME}" ]; then
+            echo "::warning::AWS_SPOX_ROLE_ARN or AWS_SPOX_SSM_IMAGE_TAG_PARAMETER is not set on ${{ matrix.environment }}; image not recorded."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS Credentials via OIDC
+        id: configure_aws
+        if: steps.check_config.outputs.configured == 'true'
+        uses: stacks-sbtc/actions/aws/configure-aws-credentials@ed353a33594a2fa97ea6702d838e4a935cce374d
+        with:
+          role-to-assume: ${{ vars.AWS_SPOX_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_SPOX_REGION }}
+
+      - name: Publish Image Tag to Parameter Store
+        id: publish_image_tag
+        if: steps.check_config.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+
+          case "${IMAGE_TAG}" in
+            ?*@sha256:?*) ;;
+            *)
+              echo "::error::Unexpected image reference '${IMAGE_TAG}'; nothing recorded."
+              exit 1
+              ;;
+          esac
+
+          aws ssm put-parameter \
+            --name "${PARAMETER_NAME}" \
+            --value "${IMAGE_TAG}" \
+            --type String \
+            --overwrite
+
+          echo "Recorded ${IMAGE_TAG} at ${PARAMETER_NAME}" >> "$GITHUB_STEP_SUMMARY"
