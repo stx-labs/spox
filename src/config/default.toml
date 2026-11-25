@@ -25,6 +25,14 @@ bitcoin_rpc_endpoint = "http://devnet:devnet@127.0.0.1:18443"
 # Environment: SPOX_POLLING_INTERVAL
 # polling_interval = 30
 
+# Maximum number of deposits to submit to Emily for each new Bitcoin block.
+# Must be positive. Additional pending deposits are submitted on later
+# blocks.
+#
+# Required: false
+# Environment: SPOX_MAX_DEPOSITS_PER_BLOCK
+# max_deposits_per_block = 25
+
 # Registry smart contract
 #
 # Required: false
